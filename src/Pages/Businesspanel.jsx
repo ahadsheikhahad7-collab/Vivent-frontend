@@ -9,22 +9,43 @@ import {
   FaClipboardList,
   FaExternalLinkAlt,
   FaEdit,
-  FaFacebook,
   FaGraduationCap,
-  FaInstagram,
-  FaLinkedin,
   FaSignOutAlt,
   FaStore,
   FaThLarge,
-  FaTiktok,
   FaTrash,
   FaUtensils,
 } from "react-icons/fa";
 import {
-  deleteCreatedEvent,
-  loadCreatedEvents,
-  saveCreatedEvent,
-} from "../utils/createdEvents";
+  eventsApi,
+  plansApi,
+  analyticsApi,
+  recordsApi,
+  subscriptionsApi,
+} from "../utils/api";
+
+// ─── Category helpers ─────────────────────────────────────────────────────────
+
+const CATEGORY_MAP = {
+  "job-fair": "job_fair",
+  "food-events": "food",
+  "educational-expo": "educational",
+  job_fair: "job_fair",
+  food: "food",
+  educational: "educational",
+  expo: "expo",
+};
+
+const getCategoryLabel = (category) => {
+  if (category === "job_fair" || category === "job-fair") return "Job Fair";
+  if (category === "food" || category === "food-events") return "Food Event";
+  if (category === "educational" || category === "educational-expo")
+    return "Educational Expo";
+  if (category === "expo") return "Expo";
+  return category || "Job Fair";
+};
+
+// ─── Static data (UI only — navigation cards) ─────────────────────────────────
 
 const availableEvents = [
   {
@@ -52,76 +73,6 @@ const availableEvents = [
     img: "https://images.unsplash.com/photo-1503676260728-1c00da094a0b?q=80&w=2022&auto=format&fit=crop",
   },
 ];
-
-const previousEvents = [
-  {
-    id: 1,
-    title: "Restaurant Launch Campaign",
-    category: "Food Event",
-    date: "2026-05-20",
-    venue: "Gulberg, Lahore",
-    status: "Completed",
-    posts: 12,
-    desc: "Improved online reach and customer footfall through event promotion.",
-    reviews: [
-      "The campaign gave our event a cleaner presence and helped us reach more visitors.",
-    ],
-  },
-  {
-    id: 2,
-    title: "Corporate Hiring Week",
-    category: "Job Fair",
-    date: "2026-05-18",
-    venue: "Expo Hall A",
-    status: "Completed",
-    posts: 9,
-    desc: "Connected business teams with qualified students and internship applicants.",
-    reviews: [
-      "Job fair promotion helped us collect stronger student applications.",
-    ],
-  },
-  {
-    id: 3,
-    title: "Training Institute Expo",
-    category: "Educational Expo",
-    date: "2026-05-16",
-    venue: "Seminar Hall",
-    status: "Completed",
-    posts: 10,
-    desc: "Generated leads for admissions, courses, and scholarship counseling.",
-    reviews: [
-      "The expo promotion plan was professional and easy to manage.",
-    ],
-  },
-];
-
-const initialManagedEvents = [
-  {
-    id: 1,
-    title: "Business Hiring Week",
-    category: "Job Fair",
-    venue: "Expo Hall A",
-    date: "2026-05-22",
-    plan: "Standard",
-    posts: 12,
-  },
-  {
-    id: 2,
-    title: "Premium Food Brand Launch",
-    category: "Food Event",
-    venue: "Central Lawn",
-    date: "2026-05-24",
-    plan: "Premium",
-    posts: 15,
-  },
-];
-
-const getCategoryLabel = (category) => {
-  if (category === "job-fair") return "Job Fair";
-  if (category === "food-events") return "Food Event";
-  if (category === "educational-expo") return "Educational Expo";
-  return category || "Job Fair";
-};
 
 const promotionPlans = [
   {
@@ -171,21 +122,23 @@ const subButton =
 const inputClass =
   "w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 outline-none transition focus:border-blue-800 focus:ring-2 focus:ring-blue-100";
 
+// ─── Main Component ───────────────────────────────────────────────────────────
+
 export const Businesspanel = () => {
   const navigate = useNavigate();
   const [activeView, setActiveView] = useState("dashboard");
   const [recordOpen, setRecordOpen] = useState(false);
-  const [managedEvents, setManagedEvents] = useState(() => [
-    ...initialManagedEvents,
-    ...loadCreatedEvents().map((event) => ({
-      ...event,
-      isCreatedEvent: true,
-      category: event.category || "job-fair",
-      categoryLabel: getCategoryLabel(event.category),
-    })),
-  ]);
-  const [editingManagedEventId, setEditingManagedEventId] = useState(null);
+
+  // Real data from backend
+  const [managedEvents, setManagedEvents] = useState([]);
+  const [pastEvents, setPastEvents] = useState([]);
+  const [plans, setPlans] = useState([]);
+  const [loadingEvents, setLoadingEvents] = useState(true);
+  const [loadingRecords, setLoadingRecords] = useState(false);
+
+  const [editingEventId, setEditingEventId] = useState(null);
   const [reviewWindow, setReviewWindow] = useState(7);
+  const [apiError, setApiError] = useState("");
 
   const pageTitle = useMemo(() => {
     if (activeView === "social") return "Social Media Promotion Plans";
@@ -197,101 +150,157 @@ export const Businesspanel = () => {
   const showDashboard = activeView === "dashboard";
   const showRecords = activeView === "records";
 
+  // Load business dashboard data
+  useEffect(() => {
+    setLoadingEvents(true);
+    analyticsApi
+      .businessDashboard()
+      .then((data) => {
+        setManagedEvents(data?.my_created_events || []);
+        setLoadingEvents(false);
+      })
+      .catch(() => {
+        // Fallback — try fetching events directly
+        eventsApi
+          .list({ page_size: 100 })
+          .then((res) => {
+            const user = JSON.parse(localStorage.getItem("viventUser") || "{}");
+            const myEvents = (res?.items || []).filter(
+              (e) => e.created_by === user.id
+            );
+            setManagedEvents(myEvents);
+            setLoadingEvents(false);
+          })
+          .catch(() => setLoadingEvents(false));
+      });
+
+    // Load available plans for event creation
+    plansApi
+      .list()
+      .then((data) => setPlans(data || []))
+      .catch(() => {});
+  }, []);
+
+  // Load records (past events)
+  useEffect(() => {
+    if (activeView !== "records" && activeView !== "dashboard") return;
+    setLoadingRecords(true);
+    recordsApi
+      .myEvents()
+      .then((data) => {
+        setPastEvents(data?.past_events || []);
+        setLoadingRecords(false);
+      })
+      .catch(() => setLoadingRecords(false));
+  }, [activeView]);
+
   const handleLogout = () => {
     localStorage.removeItem("viventAuth");
     localStorage.removeItem("viventAuthRole");
+    localStorage.removeItem("viventToken");
+    localStorage.removeItem("viventUser");
     navigate("/");
     window.location.reload();
   };
 
-  const handleManagedEventSubmit = (event, form, setForm) => {
-    event.preventDefault();
-
-    const normalized = {
-      ...form,
-      category: form.category,
-      categoryLabel: getCategoryLabel(form.category),
-      posts: Number(form.posts),
-      ticketPrice: Number(form.ticketPrice || 0),
-      isCreatedEvent: true,
-    };
-
-    if (editingManagedEventId) {
-      setManagedEvents((current) =>
-        current.map((item) => {
-          if (item.id !== editingManagedEventId) return item;
-          const updated = {
-            ...item,
-            ...normalized,
-            id: item.id,
-          };
-
-          if (item.isCreatedEvent) {
-            saveCreatedEvent(updated);
-          }
-
-          return updated;
-        })
+  // CRUD handlers
+  const handleCreateEvent = async (form, setForm) => {
+    setApiError("");
+    try {
+      const plan = plans.find(
+        (p) => p.name.toLowerCase() === (form.plan || "basic").toLowerCase()
       );
-      setEditingManagedEventId(null);
-    } else {
-      const savedEvent = saveCreatedEvent({
-        id: Date.now(),
-        ...normalized,
-      });
+      if (!plan && plans.length > 0) {
+        setApiError("Please select a valid plan.");
+        return;
+      }
+      const planId = plan?.id || (plans[0]?.id ?? "");
 
-      setManagedEvents((current) => [
-        {
-          ...savedEvent,
-          isCreatedEvent: true,
+      const backendCategory = CATEGORY_MAP[form.category] || form.category;
+      const startDate = new Date(`${form.date}T${form.time || "10:00"}:00+05:00`).toISOString();
+      const endDate = new Date(
+        new Date(startDate).getTime() + 2 * 60 * 60 * 1000
+      ).toISOString();
+
+      const payload = {
+        title: form.title,
+        description: form.description || `${form.title} event organized by ${form.company || "VIVENT"}.`,
+        category: backendCategory,
+        start_date: startDate,
+        end_date: endDate,
+        location: form.venue || "TBD",
+        plan_id: planId,
+        max_participants: 200,
+        venue_details: {
+          company: form.company,
+          image_url: form.image || "",
+          ticket_price: Number(form.ticketPrice) || 0,
+          planned_posts: Number(form.posts) || 7,
         },
-        ...current,
-      ]);
-    }
+      };
 
-    setForm({
-      title: "",
-      company: "",
-      category: "job-fair",
-      venue: "",
-      date: "2026-05-22",
-      time: "10:00 AM",
-      ticketPrice: 0,
-      image: "",
-      description: "",
-      posts: 7,
-      status: "Upcoming",
-      plan: "Standard",
-    });
+      const newEvent = await eventsApi.create(payload);
+      setManagedEvents((prev) => [newEvent, ...prev]);
+      setForm({
+        title: "", company: "", category: "job-fair", venue: "",
+        date: "", time: "10:00 AM", ticketPrice: 0, image: "",
+        description: "", posts: 7, status: "Upcoming", plan: "Basic",
+      });
+    } catch (err) {
+      setApiError(err.message || "Failed to create event.");
+    }
   };
 
-  useEffect(() => {
-    const refreshCreatedEvents = () => {
-      const created = loadCreatedEvents().map((event) => ({
-        ...event,
-        isCreatedEvent: true,
-        category: event.category || "job-fair",
-        categoryLabel: getCategoryLabel(event.category),
-      }));
-
-      setManagedEvents((current) => {
-        const preserved = current.filter((item) => !item.isCreatedEvent);
-        return [...created, ...preserved];
-      });
-    };
-
-    refreshCreatedEvents();
-    window.addEventListener("storage", refreshCreatedEvents);
-    window.addEventListener("vivent-created-events-updated", refreshCreatedEvents);
-
-    return () => {
-      window.removeEventListener("storage", refreshCreatedEvents);
-      window.removeEventListener(
-        "vivent-created-events-updated",
-        refreshCreatedEvents
+  const handleUpdateEvent = async (eventId, form, setForm) => {
+    setApiError("");
+    try {
+      const backendCategory = CATEGORY_MAP[form.category] || form.category;
+      const payload = {
+        title: form.title,
+        description: form.description,
+        category: backendCategory,
+        location: form.venue,
+        venue_details: {
+          company: form.company,
+          image_url: form.image,
+          ticket_price: Number(form.ticketPrice) || 0,
+          planned_posts: Number(form.posts) || 7,
+        },
+      };
+      const updated = await eventsApi.update(eventId, payload);
+      setManagedEvents((prev) =>
+        prev.map((e) => (e.id === eventId ? updated : e))
       );
-    };
-  }, []);
+      setEditingEventId(null);
+      setForm({
+        title: "", company: "", category: "job-fair", venue: "",
+        date: "", time: "10:00 AM", ticketPrice: 0, image: "",
+        description: "", posts: 7, status: "Upcoming", plan: "Basic",
+      });
+    } catch (err) {
+      setApiError(err.message || "Failed to update event.");
+    }
+  };
+
+  const handleDeleteEvent = async (eventId) => {
+    setApiError("");
+    try {
+      await eventsApi.delete(eventId);
+      setManagedEvents((prev) => prev.filter((e) => e.id !== eventId));
+      if (editingEventId === eventId) setEditingEventId(null);
+    } catch (err) {
+      setApiError(err.message || "Failed to delete event.");
+    }
+  };
+
+  const handleManagedEventSubmit = (event, form, setForm) => {
+    event.preventDefault();
+    if (editingEventId) {
+      handleUpdateEvent(editingEventId, form, setForm);
+    } else {
+      handleCreateEvent(form, setForm);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-slate-100">
@@ -308,9 +317,7 @@ export const Businesspanel = () => {
               <nav className="space-y-3 p-5">
                 <button
                   className={sidebarButton}
-                  onClick={() => {
-                    setActiveView("dashboard");
-                  }}
+                  onClick={() => setActiveView("dashboard")}
                   type="button"
                 >
                   <span className="flex items-center gap-3">
@@ -410,15 +417,23 @@ export const Businesspanel = () => {
             </section>
           )}
 
+          {apiError && (
+            <div className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700 shadow-sm ring-1 ring-red-100">
+              {apiError}
+            </div>
+          )}
+
           {activeView === "social" ? (
             <SocialPromotion />
           ) : activeView === "add-event" ? (
             <AddEventPanel
-              editingManagedEventId={editingManagedEventId}
+              editingEventId={editingEventId}
               handleManagedEventSubmit={handleManagedEventSubmit}
               managedEvents={managedEvents}
-              setEditingManagedEventId={setEditingManagedEventId}
-              setManagedEvents={setManagedEvents}
+              setEditingEventId={setEditingEventId}
+              handleDeleteEvent={handleDeleteEvent}
+              plans={plans}
+              loading={loadingEvents}
             />
           ) : (
             <div className="space-y-6">
@@ -428,6 +443,8 @@ export const Businesspanel = () => {
                   <RecordsView
                     reviewWindow={reviewWindow}
                     setReviewWindow={setReviewWindow}
+                    pastEvents={pastEvents}
+                    loading={loadingRecords}
                   />
                 </>
               )}
@@ -435,6 +452,8 @@ export const Businesspanel = () => {
                 <RecordsView
                   reviewWindow={reviewWindow}
                   setReviewWindow={setReviewWindow}
+                  pastEvents={pastEvents}
+                  loading={loadingRecords}
                 />
               )}
             </div>
@@ -444,6 +463,8 @@ export const Businesspanel = () => {
     </div>
   );
 };
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
 
 const AvailableEvents = ({ onAddEvent }) => (
   <section className="rounded-2xl bg-white p-5 shadow-xl ring-1 ring-slate-200 sm:p-6">
@@ -468,7 +489,6 @@ const AvailableEvents = ({ onAddEvent }) => (
     <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
       {availableEvents.map((event) => {
         const Icon = event.icon;
-
         return (
           <Link
             className="group flex h-full flex-col overflow-hidden rounded-2xl bg-slate-50 shadow-lg ring-1 ring-slate-200 transition duration-300 hover:-translate-y-1 hover:shadow-2xl"
@@ -490,12 +510,8 @@ const AvailableEvents = ({ onAddEvent }) => (
               </div>
             </div>
             <div className="flex flex-1 flex-col p-4 text-center">
-              <h4 className="text-xl font-black text-slate-900">
-                {event.title}
-              </h4>
-              <p className="mt-2 text-sm leading-6 text-slate-500">
-                {event.desc}
-              </p>
+              <h4 className="text-xl font-black text-slate-900">{event.title}</h4>
+              <p className="mt-2 text-sm leading-6 text-slate-500">{event.desc}</p>
               <span className="mt-auto inline-flex items-center justify-center gap-2 self-center rounded-full bg-blue-800 px-4 py-2.5 text-sm font-bold text-white transition duration-300 group-hover:bg-blue-900">
                 Open Page
                 <FaExternalLinkAlt className="text-xs" />
@@ -508,14 +524,11 @@ const AvailableEvents = ({ onAddEvent }) => (
   </section>
 );
 
-const RecordsView = ({ reviewWindow, setReviewWindow }) => {
-  const filteredEvents = previousEvents.filter((event) => {
-    const eventDate = new Date(`${event.date}T00:00:00`);
-    const referenceDate = new Date("2026-05-26T00:00:00");
-    const diffDays = Math.floor(
-      (referenceDate - eventDate) / (1000 * 60 * 60 * 24)
-    );
-
+const RecordsView = ({ reviewWindow, setReviewWindow, pastEvents, loading }) => {
+  const filteredEvents = pastEvents.filter((event) => {
+    const eventDate = new Date(event.end_date || event.start_date);
+    const now = new Date();
+    const diffDays = Math.floor((now - eventDate) / (1000 * 60 * 60 * 24));
     return diffDays >= 0 && diffDays <= reviewWindow;
   });
 
@@ -528,7 +541,6 @@ const RecordsView = ({ reviewWindow, setReviewWindow }) => {
               Previous Events & Reviews
             </h3>
           </div>
-
           <select
             className="w-full rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-sm font-bold text-blue-800 outline-none sm:w-36"
             onChange={(event) => setReviewWindow(Number(event.target.value))}
@@ -540,57 +552,52 @@ const RecordsView = ({ reviewWindow, setReviewWindow }) => {
           </select>
         </div>
         <div>
-          <table className="w-full table-fixed border-separate border-spacing-y-2">
-            <thead>
-              <tr className="text-left text-[11px] uppercase tracking-[0.18em] text-blue-800">
-                <th className="w-[14%] px-2 py-2">Event</th>
-                <th className="w-[12%] px-2 py-2">Category</th>
-                <th className="w-[12%] px-2 py-2">Date</th>
-                <th className="w-[14%] px-2 py-2">Venue</th>
-                <th className="w-[10%] px-2 py-2">Posts</th>
-                <th className="w-[10%] px-2 py-2">Status</th>
-                <th className="w-[28%] px-2 py-2">Public Reviews</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredEvents.map((item) => (
-                <tr className="bg-slate-50 shadow-sm" key={item.id}>
-                  <td className="rounded-l-2xl px-2 py-3 text-sm font-bold text-slate-900 align-top break-words">
-                    {item.title}
-                  </td>
-                  <td className="px-2 py-3 text-sm text-slate-700 align-top break-words">
-                    {item.category}
-                  </td>
-                  <td className="px-2 py-3 text-sm text-slate-700 align-top break-words">
-                    {item.date}
-                  </td>
-                  <td className="px-2 py-3 text-sm text-slate-700 align-top break-words">
-                    {item.venue}
-                  </td>
-                  <td className="px-2 py-3 text-sm text-slate-700 align-top break-words">
-                    {item.posts}
-                  </td>
-                  <td className="px-2 py-3 align-top">
-                    <span className="inline-flex rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-700">
-                      {item.status}
-                    </span>
-                  </td>
-                  <td className="rounded-r-2xl px-2 py-3 align-top">
-                    <div className="space-y-2 text-xs leading-5 text-slate-600">
-                      {item.reviews?.map((review, index) => (
-                        <p
-                          className="rounded-xl bg-white px-3 py-2 text-[11px] font-medium leading-5 text-slate-600"
-                          key={`${item.id}-${index}`}
-                        >
-                          {review}
-                        </p>
-                      ))}
-                    </div>
-                  </td>
+          {loading ? (
+            <p className="py-4 text-sm text-slate-400">Loading records…</p>
+          ) : filteredEvents.length === 0 ? (
+            <p className="py-4 text-sm text-slate-400">No past events in the last {reviewWindow} days.</p>
+          ) : (
+            <table className="w-full table-fixed border-separate border-spacing-y-2">
+              <thead>
+                <tr className="text-left text-[11px] uppercase tracking-[0.18em] text-blue-800">
+                  <th className="w-[14%] px-2 py-2">Event</th>
+                  <th className="w-[12%] px-2 py-2">Category</th>
+                  <th className="w-[12%] px-2 py-2">Date</th>
+                  <th className="w-[14%] px-2 py-2">Venue</th>
+                  <th className="w-[10%] px-2 py-2">Status</th>
+                  <th className="w-[10%] px-2 py-2">Attendees</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {filteredEvents.map((item) => (
+                  <tr className="bg-slate-50 shadow-sm" key={item.id}>
+                    <td className="rounded-l-2xl px-2 py-3 text-sm font-bold text-slate-900 align-top break-words">
+                      {item.title}
+                    </td>
+                    <td className="px-2 py-3 text-sm text-slate-700 align-top break-words">
+                      {getCategoryLabel(item.category)}
+                    </td>
+                    <td className="px-2 py-3 text-sm text-slate-700 align-top break-words">
+                      {item.start_date
+                        ? new Date(item.start_date).toLocaleDateString()
+                        : "TBD"}
+                    </td>
+                    <td className="px-2 py-3 text-sm text-slate-700 align-top break-words">
+                      {item.location || "TBD"}
+                    </td>
+                    <td className="px-2 py-3 align-top">
+                      <span className="inline-flex rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-700">
+                        {item.status || "Completed"}
+                      </span>
+                    </td>
+                    <td className="rounded-r-2xl px-2 py-3 text-sm text-slate-700 align-top">
+                      {item.current_participants || 0}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       </section>
     </section>
@@ -598,25 +605,27 @@ const RecordsView = ({ reviewWindow, setReviewWindow }) => {
 };
 
 const AddEventPanel = ({
-  editingManagedEventId,
+  editingEventId,
   handleManagedEventSubmit,
   managedEvents,
-  setEditingManagedEventId,
-  setManagedEvents,
+  setEditingEventId,
+  handleDeleteEvent,
+  plans,
+  loading,
 }) => {
   const [form, setForm] = useState({
     title: "",
     company: "",
     category: "job-fair",
     venue: "",
-    date: "2026-05-22",
+    date: new Date().toISOString().split("T")[0],
     time: "10:00 AM",
     ticketPrice: 0,
     image: "",
     description: "",
     posts: 7,
     status: "Upcoming",
-    plan: "Standard",
+    plan: "Basic",
   });
 
   const updateField = (field, value) => {
@@ -633,121 +642,70 @@ const AddEventPanel = ({
           <div className="space-y-4">
             <label className="block text-sm font-bold text-black">
               Event Title
-              <input
-                className={inputClass}
-                onChange={(event) => updateField("title", event.target.value)}
-                required
-                value={form.title}
-              />
+              <input className={inputClass} onChange={(event) => updateField("title", event.target.value)} required value={form.title} />
             </label>
 
             <label className="block text-sm font-bold text-black">
               Company / Brand
-              <input
-                className={inputClass}
-                onChange={(event) => updateField("company", event.target.value)}
-                required
-                value={form.company}
-              />
+              <input className={inputClass} onChange={(event) => updateField("company", event.target.value)} required value={form.company} />
             </label>
 
             <label className="block text-sm font-bold text-black">
               Event Category
-              <select
-                className={inputClass}
-                onChange={(event) => updateField("category", event.target.value)}
-                value={form.category}
-              >
+              <select className={inputClass} onChange={(event) => updateField("category", event.target.value)} value={form.category}>
                 <option value="job-fair">Job Fair</option>
                 <option value="food-events">Food Event</option>
                 <option value="educational-expo">Educational Expo</option>
+                <option value="expo">Expo</option>
               </select>
             </label>
 
             <label className="block text-sm font-bold text-black">
               Venue
-              <input
-                className={inputClass}
-                onChange={(event) => updateField("venue", event.target.value)}
-                required
-                value={form.venue}
-              />
+              <input className={inputClass} onChange={(event) => updateField("venue", event.target.value)} required value={form.venue} />
             </label>
 
             <label className="block text-sm font-bold text-black">
               Time
-              <input
-                className={inputClass}
-                onChange={(event) => updateField("time", event.target.value)}
-                required
-                value={form.time}
-              />
+              <input className={inputClass} onChange={(event) => updateField("time", event.target.value)} required value={form.time} />
             </label>
 
             <label className="block text-sm font-bold text-black">
               Date
-              <input
-                className={inputClass}
-                onChange={(event) => updateField("date", event.target.value)}
-                type="date"
-                value={form.date}
-              />
+              <input className={inputClass} onChange={(event) => updateField("date", event.target.value)} type="date" value={form.date} required />
             </label>
 
             <label className="block text-sm font-bold text-black">
               Ticket Price
-              <input
-                className={inputClass}
-                min="0"
-                onChange={(event) =>
-                  updateField("ticketPrice", Number(event.target.value))
-                }
-                type="number"
-                value={form.ticketPrice}
-              />
+              <input className={inputClass} min="0" onChange={(event) => updateField("ticketPrice", Number(event.target.value))} type="number" value={form.ticketPrice} />
             </label>
 
             <label className="block text-sm font-bold text-black">
               Event Image URL
-              <input
-                className={inputClass}
-                onChange={(event) => updateField("image", event.target.value)}
-                placeholder="https://..."
-                value={form.image}
-              />
+              <input className={inputClass} onChange={(event) => updateField("image", event.target.value)} placeholder="https://..." value={form.image} />
             </label>
 
             <label className="block text-sm font-bold text-black md:col-span-2">
               Description
-              <textarea
-                className={inputClass}
-                onChange={(event) => updateField("description", event.target.value)}
-                placeholder="Short event description..."
-                value={form.description}
-              />
+              <textarea className={inputClass} onChange={(event) => updateField("description", event.target.value)} placeholder="Short event description..." value={form.description} required />
             </label>
 
             <label className="block text-sm font-bold text-black">
               Planned Posts
-              <input
-                className={inputClass}
-                min="1"
-                onChange={(event) => updateField("posts", Number(event.target.value))}
-                type="number"
-                value={form.posts}
-              />
+              <input className={inputClass} min="1" onChange={(event) => updateField("posts", Number(event.target.value))} type="number" value={form.posts} />
             </label>
 
             <label className="block text-sm font-bold text-black">
               Promotion Plan
-              <select
-                className={inputClass}
-                onChange={(event) => updateField("plan", event.target.value)}
-                value={form.plan}
-              >
-                <option>Basic</option>
-                <option>Standard</option>
-                <option>Premium</option>
+              <select className={inputClass} onChange={(event) => updateField("plan", event.target.value)} value={form.plan}>
+                {plans.length > 0
+                  ? plans.map((p) => <option key={p.id} value={p.name}>{p.name}</option>)
+                  : <>
+                      <option>Basic</option>
+                      <option>Normal</option>
+                      <option>Premium</option>
+                    </>
+                }
               </select>
             </label>
 
@@ -755,7 +713,7 @@ const AddEventPanel = ({
               className="h-11 w-full rounded-full bg-blue-800 font-bold text-white transition hover:bg-blue-900"
               type="submit"
             >
-              {editingManagedEventId ? "Update Event" : "Save Event"}
+              {editingEventId ? "Update Event" : "Save Event"}
             </button>
           </div>
         </div>
@@ -769,58 +727,71 @@ const AddEventPanel = ({
           </div>
 
           <div>
-            <table className="w-full table-fixed border-separate border-spacing-y-2">
+            {loading ? (
+              <p className="py-4 text-sm text-slate-400">Loading your events…</p>
+            ) : managedEvents.length === 0 ? (
+              <p className="py-4 text-sm text-slate-400">No events yet. Create your first event above.</p>
+            ) : (
+              <table className="w-full table-fixed border-separate border-spacing-y-2">
                 <thead>
                   <tr className="text-left text-[11px] uppercase tracking-[0.18em] text-black">
                     <th className="w-[16%] px-2 py-2">Event</th>
                     <th className="w-[13%] px-2 py-2">Category</th>
                     <th className="w-[16%] px-2 py-2">Venue</th>
                     <th className="w-[13%] px-2 py-2">Date</th>
-                    <th className="w-[12%] px-2 py-2">Plan</th>
-                    <th className="w-[9%] px-2 py-2">Posts</th>
+                    <th className="w-[12%] px-2 py-2">Status</th>
                     <th className="w-[21%] px-2 py-2 text-center">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {managedEvents.map((event) => (
-                    <tr className="bg-slate-50 shadow-sm" key={event.id || event.title}>
+                    <tr className="bg-slate-50 shadow-sm" key={event.id}>
                       <td className="rounded-l-2xl px-2 py-3 text-sm font-bold text-slate-900 align-top break-words">
                         {event.title}
                       </td>
                       <td className="px-2 py-3 text-sm text-slate-700 align-top break-words">
-                        {event.categoryLabel || getCategoryLabel(event.category)}
+                        {getCategoryLabel(event.category)}
                       </td>
                       <td className="px-2 py-3 text-sm text-slate-700 align-top break-words">
-                        {event.venue || "TBD"}
+                        {event.location || "TBD"}
                       </td>
                       <td className="px-2 py-3 text-sm text-slate-700 align-top break-words">
-                        {event.date || "TBD"}
+                        {event.start_date
+                          ? new Date(event.start_date).toLocaleDateString()
+                          : "TBD"}
                       </td>
-                      <td className="px-2 py-3 text-sm text-slate-700 align-top break-words">
-                        {event.plan || "Standard"}
-                      </td>
-                      <td className="px-2 py-3 text-sm text-slate-700 align-top break-words">
-                        {event.posts || "7"}
+                      <td className="px-2 py-3 align-top">
+                        <span className={`inline-flex rounded-full px-3 py-1 text-xs font-bold ${
+                          event.status === "approved"
+                            ? "bg-emerald-100 text-emerald-700"
+                            : event.status === "rejected"
+                            ? "bg-red-100 text-red-700"
+                            : "bg-amber-100 text-amber-700"
+                        }`}>
+                          {event.status || "pending"}
+                        </span>
                       </td>
                       <td className="rounded-r-2xl px-2 py-3 align-top">
                         <div className="flex flex-wrap justify-center gap-2">
                           <button
                             className="inline-flex items-center gap-2 rounded-xl bg-blue-800 px-3 py-2 text-xs font-bold text-white transition hover:bg-blue-900"
                             onClick={() => {
-                              setEditingManagedEventId(event.id);
+                              setEditingEventId(event.id);
                               setForm({
                                 title: event.title || "",
-                                company: event.company || "",
-                                category: event.category || "job-fair",
-                                venue: event.venue || "",
-                                date: event.date || "2026-05-22",
-                                time: event.time || "10:00 AM",
-                                ticketPrice: event.ticketPrice || 0,
-                                image: event.image || "",
+                                company: event.venue_details?.company || "",
+                                category: event.category || "job_fair",
+                                venue: event.location || "",
+                                date: event.start_date
+                                  ? new Date(event.start_date).toISOString().split("T")[0]
+                                  : "",
+                                time: "10:00 AM",
+                                ticketPrice: event.venue_details?.ticket_price || 0,
+                                image: event.venue_details?.image_url || "",
                                 description: event.description || "",
-                                posts: event.posts || 7,
+                                posts: event.venue_details?.planned_posts || 7,
                                 status: event.status || "Upcoming",
-                                plan: event.plan || "Standard",
+                                plan: "Basic",
                               });
                             }}
                             type="button"
@@ -830,31 +801,7 @@ const AddEventPanel = ({
                           </button>
                           <button
                             className="inline-flex items-center gap-2 rounded-xl bg-red-600 px-3 py-2 text-xs font-bold text-white transition hover:bg-red-700"
-                            onClick={() => {
-                              if (event.isCreatedEvent) {
-                                deleteCreatedEvent(event.id);
-                              }
-                              setManagedEvents((current) =>
-                                current.filter((item) => item.id !== event.id)
-                              );
-                              if (editingManagedEventId === event.id) {
-                                setEditingManagedEventId(null);
-                                setForm({
-                                  title: "",
-                                  company: "",
-                                  category: "job-fair",
-                                  venue: "",
-                                  date: "2026-05-22",
-                                  time: "10:00 AM",
-                                  ticketPrice: 0,
-                                  image: "",
-                                  description: "",
-                                  posts: 7,
-                                  status: "Upcoming",
-                                  plan: "Standard",
-                                });
-                              }
-                            }}
+                            onClick={() => handleDeleteEvent(event.id)}
                             type="button"
                           >
                             <FaTrash />
@@ -865,7 +812,8 @@ const AddEventPanel = ({
                     </tr>
                   ))}
                 </tbody>
-            </table>
+              </table>
+            )}
           </div>
         </div>
       </form>
@@ -873,56 +821,136 @@ const AddEventPanel = ({
   );
 };
 
-const SocialPromotion = () => (
-  <section className="space-y-6">
-    <div className="grid gap-4 lg:grid-cols-3">
-      {promotionPlans.map((plan) => (
-        <article
-          className={`flex h-full flex-col rounded-2xl bg-white p-4 shadow-xl ring-1 transition duration-300 hover:-translate-y-1 hover:shadow-2xl ${
-            plan.highlighted ? "ring-blue-800" : "ring-slate-200"
-          }`}
-          key={plan.name}
-        >
-          <div className="mb-4 flex items-start justify-between gap-4">
-            <div>
-              <h3 className="text-xl font-black text-slate-900">
-                {plan.name}
-              </h3>
-              <p className="mt-1 text-xs font-bold uppercase tracking-[0.18em] text-blue-800">
-                {plan.posts}
+const SocialPromotion = () => {
+  const [plans, setPlans] = useState([]);
+  const [activePlanId, setActivePlanId] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [selectingId, setSelectingId] = useState(null);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    Promise.all([
+      plansApi.list().catch(() => []),
+      subscriptionsApi.me().catch(() => null),
+    ]).then(([planData, sub]) => {
+      setPlans(planData || []);
+      if (sub?.plan_id) setActivePlanId(sub.plan_id);
+      setLoading(false);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!message) return undefined;
+    const t = setTimeout(() => setMessage(""), 3000);
+    return () => clearTimeout(t);
+  }, [message]);
+
+  const handleSelectPlan = async (planId) => {
+    setSelectingId(planId);
+    try {
+      const res = await subscriptionsApi.subscribe(planId);
+      setActivePlanId(res.plan_id);
+      setMessage(`✓ ${res.plan?.name || "Plan"} activated successfully!`);
+    } catch (err) {
+      setMessage(`Error: ${err.message}`);
+    } finally {
+      setSelectingId(null);
+    }
+  };
+
+  const displayPlans = plans.map((p, idx) => ({
+    id: p.id,
+    name: p.name,
+    price: `$${parseFloat(p.price).toFixed(0)}`,
+    posts: p.facilities?.posts || `${7 + idx * 5} Posts on Social Media`,
+    features: p.facilities?.features || [
+      "All starter features +",
+      "Social media strategy",
+      "Content Creation",
+      "On Facebook, Instagram",
+    ],
+    highlighted: idx === 1,
+  }));
+
+  if (loading) {
+    return (
+      <section className="space-y-6">
+        <div className="rounded-2xl bg-white p-8 text-center text-blue-800 shadow-xl ring-1 ring-slate-200">
+          Loading plans…
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="space-y-6">
+      {message && (
+        <div className="fixed bottom-24 right-5 z-[80] rounded-2xl bg-blue-800 px-4 py-3 text-sm font-bold text-white shadow-2xl">
+          {message}
+        </div>
+      )}
+      <div className="grid gap-4 lg:grid-cols-3">
+        {displayPlans.map((plan) => {
+          const isActive = plan.id === activePlanId;
+          const isSelecting = selectingId === plan.id;
+          return (
+            <article
+              className={`flex h-full flex-col rounded-2xl bg-white p-4 shadow-xl ring-1 transition duration-300 hover:-translate-y-1 hover:shadow-2xl ${
+                isActive ? "ring-emerald-500" : plan.highlighted ? "ring-blue-800" : "ring-slate-200"
+              }`}
+              key={plan.id || plan.name}
+            >
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-xl font-black text-slate-900">{plan.name}</h3>
+                  <p className="mt-1 text-xs font-bold uppercase tracking-[0.18em] text-blue-800">
+                    {plan.posts}
+                  </p>
+                </div>
+                {isActive && (
+                  <span className="rounded-lg bg-emerald-500 px-2.5 py-1.5 text-[11px] font-black text-white">
+                    Active
+                  </span>
+                )}
+                {!isActive && plan.highlighted && (
+                  <span className="rounded-lg bg-blue-800 px-2.5 py-1.5 text-[11px] font-black text-white">
+                    Popular
+                  </span>
+                )}
+              </div>
+
+              <p className="mb-4 text-3xl font-black text-blue-800">
+                {plan.price}
+                <span className="text-sm font-bold text-slate-500"> / month</span>
               </p>
-            </div>
-            {plan.highlighted && (
-              <span className="rounded-lg bg-blue-800 px-2.5 py-1.5 text-[11px] font-black text-white">
-                Popular
-              </span>
-            )}
-          </div>
 
-          <p className="mb-4 text-3xl font-black text-blue-800">
-            {plan.price}
-            <span className="text-sm font-bold text-slate-500"> / month</span>
-          </p>
+              <ul className="space-y-2.5 text-xs leading-5 text-slate-600">
+                {plan.features.map((feature) => (
+                  <li className="flex gap-3" key={feature}>
+                    <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-blue-800" />
+                    {feature}
+                  </li>
+                ))}
+              </ul>
 
-          <ul className="space-y-2.5 text-xs leading-5 text-slate-600">
-            {plan.features.map((feature) => (
-              <li className="flex gap-3" key={feature}>
-                <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-blue-800" />
-                {feature}
-              </li>
-            ))}
-          </ul>
-
-          <button
-            className="mt-5 w-full rounded-xl bg-blue-800 px-4 py-3 text-sm font-bold text-white shadow-lg transition duration-300 hover:bg-blue-900"
-            type="button"
-          >
-            Select Plan
-          </button>
-        </article>
-      ))}
-    </div>
-  </section>
-);
+              <button
+                className={`mt-5 w-full rounded-xl px-4 py-3 text-sm font-bold text-white shadow-lg transition duration-300 disabled:opacity-60 ${
+                  isActive
+                    ? "bg-emerald-500 hover:bg-emerald-600"
+                    : "bg-blue-800 hover:bg-blue-900"
+                }`}
+                onClick={() => handleSelectPlan(plan.id)}
+                disabled={isSelecting || isActive}
+                type="button"
+              >
+                {isSelecting ? "Activating…" : isActive ? "Current Plan" : "Select Plan"}
+              </button>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+};
 
 export default Businesspanel;
