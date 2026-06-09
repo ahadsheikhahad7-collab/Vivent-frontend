@@ -28,6 +28,7 @@ import FloatingFAQ from "./layout/FloatingFAQ";
 const roleDashboardPath = (role) => {
   if (role === "student") return "/studentpanel";
   if (role === "business") return "/businesspanel";
+  if (role === "admin") return "/adminpanel";
   return "/";
 };
 
@@ -47,7 +48,9 @@ const ProtectedRoute = ({ isAuthenticated, currentRole, allowedRoles, children }
 
 const AppLayout = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(
-    () => localStorage.getItem("viventAuth") === "true"
+    () =>
+      localStorage.getItem("viventAuth") === "true" &&
+      !!localStorage.getItem("viventToken")
   );
   const [authRole, setAuthRole] = useState(
     () => localStorage.getItem("viventAuthRole") || ""
@@ -67,6 +70,8 @@ const AppLayout = () => {
   const handleLogout = () => {
     localStorage.removeItem("viventAuth");
     localStorage.removeItem("viventAuthRole");
+    localStorage.removeItem("viventToken");
+    localStorage.removeItem("viventUser");
     setIsAuthenticated(false);
     setAuthRole("");
   };
