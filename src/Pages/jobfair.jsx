@@ -1,8 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { FaBriefcase, FaMapMarkerAlt } from "react-icons/fa";
-import { showcaseEvents } from "../data/eventCatalog";
-import { saveJoinedEvent } from "../utils/joinedEvents";
-import { loadCreatedEventsByCategory } from "../utils/createdEvents";
+import { eventsApi, registrationsApi, paymentsApi } from "../utils/api";
 
 const initialApplication = {
   applicantName: "",
@@ -14,49 +12,52 @@ const initialApplication = {
   coverLetter: "",
 };
 
-const storageKey = "viventJobApplications";
-
 const Jobfair = () => {
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [paymentResult, setPaymentResult] = useState("");
   const [selectedJob, setSelectedJob] = useState(null);
   const [applicationForm, setApplicationForm] = useState(initialApplication);
-  const [customJobEvents, setCustomJobEvents] = useState([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [registeredIds, setRegisteredIds] = useState(new Set());
+
+  // Load approved job_fair events from backend
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    eventsApi
+      .list({ category: "job_fair", status: "approved", page_size: 100 })
+      .then((res) => {
+        if (!cancelled) {
+          setEvents(res?.items || []);
+          setLoading(false);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setError(err.message || "Failed to load events.");
+          setLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!paymentResult) return undefined;
-
-    const timer = setTimeout(() => {
-      setPaymentResult("");
-    }, 3000);
-
+    const timer = setTimeout(() => setPaymentResult(""), 3000);
     return () => clearTimeout(timer);
   }, [paymentResult]);
 
   const selectedJobLabel = useMemo(() => {
     if (!selectedJob) return "";
-    return `${selectedJob.title} at ${selectedJob.company}`;
+    return selectedJob.title;
   }, [selectedJob]);
 
-  useEffect(() => {
-    const refreshCreatedEvents = () => {
-      setCustomJobEvents(loadCreatedEventsByCategory("job-fair"));
-    };
-
-    refreshCreatedEvents();
-    window.addEventListener("storage", refreshCreatedEvents);
-    window.addEventListener("vivent-created-events-updated", refreshCreatedEvents);
-
-    return () => {
-      window.removeEventListener("storage", refreshCreatedEvents);
-      window.removeEventListener("vivent-created-events-updated", refreshCreatedEvents);
-    };
-  }, []);
-
   const updateField = (field, value) => {
-    setApplicationForm((current) => ({
-      ...current,
-      [field]: value,
-    }));
+    setApplicationForm((current) => ({ ...current, [field]: value }));
   };
 
   const handleCvFileChange = (file) => {
@@ -69,42 +70,34 @@ const Jobfair = () => {
     setApplicationForm(initialApplication);
   };
 
-  const submitApplication = (event) => {
-    event.preventDefault();
-
-    const entry = {
-      id: Date.now(),
-      ...applicationForm,
-      jobTitle: selectedJob?.title || "",
-      company: selectedJob?.company || "",
-      location: selectedJob?.location || "",
-      submittedAt: new Date().toISOString(),
-      status: "Applied",
-    };
-
-    const existing = JSON.parse(localStorage.getItem(storageKey) || "[]");
-    localStorage.setItem(storageKey, JSON.stringify([entry, ...existing]));
-    saveJoinedEvent({
-      eventKey: `job-fair-${selectedJob?.title || "application"}`,
-      type: "Job Fair",
-      title: selectedJob?.title || "Job Fair Application",
-      company: selectedJob?.company || "",
-      location: selectedJob?.location || "",
-      applicantName: applicationForm.applicantName,
-      email: applicationForm.email,
-      phone: applicationForm.phone,
-      currentRole: applicationForm.currentRole,
-      cvLink: applicationForm.cvLink,
-      coverLetter: applicationForm.coverLetter,
-      status: "Applied",
-      submittedAt: new Date().toISOString(),
-    });
-
-    setPaymentResult(
-      `${selectedJob?.title || "Application"} submitted successfully.`
-    );
-    closeModal();
+  const submitApplication = async (e) => {
+    e.preventDefault();
+    if (!selectedJob) return;
+    setSubmitting(true);
+    try {
+      // Register for the event on the backend
+      await registrationsApi.register(selectedJob.id, "participant");
+      setRegisteredIds((prev) => new Set([...prev, selectedJob.id]));
+      setPaymentResult(`${selectedJob.title} — registration submitted successfully!`);
+    } catch (err) {
+      setPaymentResult(`Error: ${err.message}`);
+    } finally {
+      setSubmitting(false);
+      closeModal();
+    }
   };
+
+  // Normalize event fields from backend response
+  const normalizeEvent = (item) => ({
+    ...item,
+    company: item.venue_details?.company || item.location || "Company",
+    location: item.location,
+    ticketPrice: item.venue_details?.ticket_price || 0,
+    image:
+      item.venue_details?.image_url ||
+      "https://images.unsplash.com/photo-1552664730-d307ca884978?q=80&w=1974",
+    description: item.description,
+  });
 
   return (
     <div className="bg-gray-100">
@@ -148,90 +141,116 @@ const Jobfair = () => {
         </div>
 
         <div className="mx-auto max-w-5xl space-y-5 px-6">
-          {[...customJobEvents, ...showcaseEvents.jobFair].map((item) => (
-            <article
-              className="group overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-md transition-all duration-300 hover:shadow-xl"
-              key={item.id || item.title}
-            >
-              <div className="flex flex-col items-center lg:flex-row">
-                <div className="relative w-full overflow-hidden lg:w-[35%]">
-                  <img
-                    alt={item.title}
-                    className="h-[190px] w-full object-cover transition duration-500 group-hover:scale-105"
-                    src={item.image}
-                  />
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent" />
-                </div>
-
-                <div className="w-full p-5 lg:w-[65%] lg:p-7">
-                  <div className="mb-4 inline-flex items-center gap-2 rounded-full bg-blue-50 px-3.5 py-1.5 text-blue-800">
-                    <FaBriefcase />
-                    <span className="text-xs font-semibold">
-                      Internship Opportunity
-                    </span>
-                  </div>
-
-                  <h2 className="mb-3 text-2xl font-bold leading-snug text-blue-800 md:text-3xl">
-                    {item.title}
-                  </h2>
-                  <p className="mb-3 text-base font-medium text-black-800 md:text-lg">
-                    {item.company}
-                  </p>
-
-                  <div className="mb-4 flex items-center gap-3 text-black-500">
-                    <FaMapMarkerAlt className="text-lg text-pink-500" />
-                    <span className="text-sm md:text-base">{item.location}</span>
-                  </div>
-
-                  <div className="mb-5 flex items-center gap-4">
-                    <div className="flex -space-x-3">
+          {loading && (
+            <div className="rounded-2xl bg-white p-8 text-center text-blue-800 shadow-md">
+              Loading job fair events…
+            </div>
+          )}
+          {error && (
+            <div className="rounded-2xl bg-red-50 p-8 text-center text-red-600 shadow-md">
+              {error}
+            </div>
+          )}
+          {!loading && !error && events.length === 0 && (
+            <div className="rounded-2xl bg-white p-8 text-center text-slate-500 shadow-md">
+              No job fair events available at this time.
+            </div>
+          )}
+          {!loading &&
+            events.map((rawItem) => {
+              const item = normalizeEvent(rawItem);
+              const isRegistered = registeredIds.has(item.id);
+              return (
+                <article
+                  className="group overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-md transition-all duration-300 hover:shadow-xl"
+                  key={item.id}
+                >
+                  <div className="flex flex-col items-center lg:flex-row">
+                    <div className="relative w-full overflow-hidden lg:w-[35%]">
                       <img
-                        alt=""
-                        src="https://randomuser.me/api/portraits/men/32.jpg"
-                        className="h-11 w-11 rounded-full border-4 border-white"
+                        alt={item.title}
+                        className="h-[190px] w-full object-cover transition duration-500 group-hover:scale-105"
+                        src={item.image}
                       />
-                      <img
-                        alt=""
-                        src="https://randomuser.me/api/portraits/women/44.jpg"
-                        className="h-11 w-11 rounded-full border-4 border-white"
-                      />
-                      <img
-                        alt=""
-                        src="https://randomuser.me/api/portraits/men/41.jpg"
-                        className="h-11 w-11 rounded-full border-4 border-white"
-                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent" />
                     </div>
-                    <div>
-                      <h4 className="text-sm font-semibold text-blue-800 md:text-base">
-                        Hiring Recruiters
-                      </h4>
-                      <p className="text-xs text-black-500 md:text-sm">
-                        Professional HR Teams
+
+                    <div className="w-full p-5 lg:w-[65%] lg:p-7">
+                      <div className="mb-4 inline-flex items-center gap-2 rounded-full bg-blue-50 px-3.5 py-1.5 text-blue-800">
+                        <FaBriefcase />
+                        <span className="text-xs font-semibold">
+                          Internship Opportunity
+                        </span>
+                      </div>
+
+                      <h2 className="mb-3 text-2xl font-bold leading-snug text-blue-800 md:text-3xl">
+                        {item.title}
+                      </h2>
+                      <p className="mb-3 text-base font-medium text-black-800 md:text-lg">
+                        {item.company}
                       </p>
+
+                      <div className="mb-4 flex items-center gap-3 text-black-500">
+                        <FaMapMarkerAlt className="text-lg text-pink-500" />
+                        <span className="text-sm md:text-base">{item.location}</span>
+                      </div>
+
+                      <div className="mb-5 flex items-center gap-4">
+                        <div className="flex -space-x-3">
+                          <img
+                            alt=""
+                            src="https://randomuser.me/api/portraits/men/32.jpg"
+                            className="h-11 w-11 rounded-full border-4 border-white"
+                          />
+                          <img
+                            alt=""
+                            src="https://randomuser.me/api/portraits/women/44.jpg"
+                            className="h-11 w-11 rounded-full border-4 border-white"
+                          />
+                          <img
+                            alt=""
+                            src="https://randomuser.me/api/portraits/men/41.jpg"
+                            className="h-11 w-11 rounded-full border-4 border-white"
+                          />
+                        </div>
+                        <div>
+                          <h4 className="text-sm font-semibold text-blue-800 md:text-base">
+                            Hiring Recruiters
+                          </h4>
+                          <p className="text-xs text-black-500 md:text-sm">
+                            Professional HR Teams
+                          </p>
+                        </div>
+                      </div>
+
+                      <p className="mb-5 max-w-2xl text-sm leading-relaxed text-black-500 md:text-base">
+                        {item.description ||
+                          "Join our premium internship programs and connect with top companies through VIVENT. Build professional skills, gain real-world experience, and grow your career network."}
+                      </p>
+
+                      <div className="flex flex-wrap gap-3">
+                        <button
+                          className={`min-w-32 rounded-full px-6 py-3 text-sm font-semibold text-white shadow-lg transition-all duration-300 hover:scale-105 ${
+                            isRegistered
+                              ? "cursor-default bg-emerald-600 hover:bg-emerald-700"
+                              : "bg-blue-800 hover:bg-blue-900"
+                          }`}
+                          onClick={() => {
+                            if (isRegistered) return;
+                            setSelectedJob(item);
+                            setApplicationForm(initialApplication);
+                          }}
+                          disabled={isRegistered}
+                          type="button"
+                        >
+                          {isRegistered ? "Registered" : "Apply Now"}
+                        </button>
+                      </div>
                     </div>
                   </div>
-
-                  <p className="mb-5 max-w-2xl text-sm leading-relaxed text-black-500 md:text-base">
-                    {item.description ||
-                      "Join our premium internship programs and connect with top companies through VIVENT. Build professional skills, gain real-world experience, and grow your career network."}
-                  </p>
-
-                  <div className="flex flex-wrap gap-3">
-                    <button
-                      className="min-w-32 rounded-full bg-blue-800 px-6 py-3 text-sm font-semibold text-white shadow-lg transition-all duration-300 hover:scale-105 hover:bg-blue-900"
-                      onClick={() => {
-                        setSelectedJob(item);
-                        setApplicationForm(initialApplication);
-                      }}
-                      type="button"
-                    >
-                      Apply Now
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </article>
-          ))}
+                </article>
+              );
+            })}
         </div>
       </section>
 
@@ -347,10 +366,11 @@ const Jobfair = () => {
                 Cancel
               </button>
               <button
-                className="rounded-xl bg-blue-800 px-5 py-2 text-sm font-bold text-white transition hover:bg-blue-900"
+                className="rounded-xl bg-blue-800 px-5 py-2 text-sm font-bold text-white transition hover:bg-blue-900 disabled:opacity-60"
                 type="submit"
+                disabled={submitting}
               >
-                Submit
+                {submitting ? "Submitting…" : "Submit"}
               </button>
             </div>
           </form>

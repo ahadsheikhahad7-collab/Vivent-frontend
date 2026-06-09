@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { FaUser, FaEnvelope, FaPhone, FaLock, FaGoogle } from 'react-icons/fa';
-import { saveUser } from "../utils/authStorage";
+import api from "../utils/api";
 
 const rolePath = (role) => {
   if (role === "student") return "/studentpanel";
@@ -17,23 +17,49 @@ const Signup = ({ onAuth }) => {
     password: '',
     accountType: ''
   });
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
   const navigate = useNavigate();
   const location = useLocation();
   const redirectPath = location.state?.from?.pathname || '/';
 
   const handleChange = (e) => {
-    setFormData({
-      ...formData,
-      [e.target.name]: e.target.value
-    });
+    setFormData({ ...formData, [e.target.name]: e.target.value });
+    setError('');
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    saveUser(formData);
-    onAuth(formData.accountType);
-    navigate(rolePath(formData.accountType) || redirectPath, { replace: true });
+    setError('');
+    setLoading(true);
+
+    try {
+      // Register on backend
+      await api.auth.register(
+        formData.email,
+        formData.password,
+        formData.username,
+        formData.accountType
+      );
+
+      // Auto-login after registration
+      const loginData = await api.auth.login(formData.email, formData.password);
+      const user = loginData.user;
+      const role = user?.role || formData.accountType;
+
+      localStorage.setItem("viventToken", loginData.access_token);
+      localStorage.setItem("viventAuth", "true");
+      localStorage.setItem("viventAuthRole", role);
+      localStorage.setItem("viventUser", JSON.stringify(user));
+
+      onAuth(role);
+      navigate(rolePath(role) || redirectPath, { replace: true });
+    } catch (err) {
+      setError(err.message || 'Registration failed. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -84,7 +110,6 @@ const Signup = ({ onAuth }) => {
                 value={formData.phoneNumber}
                 onChange={handleChange}
                 className="w-full px-3 py-3 outline-none"
-                required
               />
             </div>
 
@@ -97,6 +122,7 @@ const Signup = ({ onAuth }) => {
                 value={formData.password}
                 onChange={handleChange}
                 className="w-full px-3 py-3 outline-none"
+                minLength={8}
                 required
               />
             </div>
@@ -115,11 +141,16 @@ const Signup = ({ onAuth }) => {
               </select>
             </div>
 
+            {error && (
+              <p className="mb-4 text-sm font-medium text-red-600">{error}</p>
+            )}
+
             <button
-              className="w-full rounded-lg bg-blue-800 py-3 font-semibold text-white transition hover:bg-blue-900"
+              className="w-full rounded-lg bg-blue-800 py-3 font-semibold text-white transition hover:bg-blue-900 disabled:opacity-60"
               type="submit"
+              disabled={loading}
             >
-              Sign Up
+              {loading ? 'Creating Account…' : 'Sign Up'}
             </button>
 
             <div className="flex items-center my-6">

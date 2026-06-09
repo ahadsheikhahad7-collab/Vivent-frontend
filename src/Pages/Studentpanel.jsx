@@ -6,16 +6,13 @@ import {
   FaChevronRight,
   FaClipboardList,
   FaExternalLinkAlt,
-  FaFacebook,
   FaInstagram,
-  FaLinkedin,
   FaSignOutAlt,
   FaThLarge,
-  FaTiktok,
   FaGraduationCap,
   FaUtensils,
 } from "react-icons/fa";
-import { loadJoinedEvents } from "../utils/joinedEvents";
+import { analyticsApi, recordsApi, plansApi, subscriptionsApi } from "../utils/api";
 
 const availableEvents = [
   {
@@ -41,48 +38,6 @@ const availableEvents = [
     tag: "Learning",
     desc: "Browse institutes, scholarship programs, training booths, and admissions.",
     img: "https://images.unsplash.com/photo-1503676260728-1c00da094a0b?q=80&w=2022&auto=format&fit=crop",
-  },
-];
-
-const previousEvents = [
-  {
-    id: 1,
-    title: "Tech Innovators Job Fair",
-    category: "Job Fair",
-    date: "2026-05-10",
-    time: "10:00 AM",
-    venue: "Expo Hall A",
-    attendees: 320,
-    status: "Completed",
-    reviews: [
-      "Helpful recruiter sessions and clear internship guidance.",
-      "Visitors liked the clean booth layout and event flow.",
-    ],
-  },
-  {
-    id: 2,
-    title: "Campus Food Carnival",
-    category: "Food Event",
-    date: "2026-05-08",
-    time: "5:00 PM",
-    venue: "Central Lawn",
-    attendees: 410,
-    status: "Completed",
-    reviews: ["Food stalls were well organised and easy to navigate."],
-  },
-  {
-    id: 3,
-    title: "Future Minds Expo",
-    category: "Educational Expo",
-    date: "2026-05-05",
-    time: "11:30 AM",
-    venue: "Seminar Hall",
-    attendees: 290,
-    status: "Completed",
-    reviews: [
-      "Educational booths and scholarship details were excellent.",
-      "Smooth student registration experience.",
-    ],
   },
 ];
 
@@ -136,6 +91,9 @@ export const Studentpanel = () => {
   const [activeView, setActiveView] = useState("dashboard");
   const [recordOpen, setRecordOpen] = useState(false);
   const [joinedEvents, setJoinedEvents] = useState([]);
+  const [pastEvents, setPastEvents] = useState([]);
+  const [loadingJoined, setLoadingJoined] = useState(false);
+  const [loadingPast, setLoadingPast] = useState(false);
   const [reviewWindow, setReviewWindow] = useState(7);
 
   const pageTitle = useMemo(() => {
@@ -148,25 +106,36 @@ export const Studentpanel = () => {
   const showJoined = activeView === "joined";
   const showRecords = activeView === "records";
 
+  // Fetch student dashboard data (joined events)
   useEffect(() => {
-    const refreshJoinedEvents = () => {
-      setJoinedEvents(loadJoinedEvents());
-    };
-
-    refreshJoinedEvents();
-
-    window.addEventListener("storage", refreshJoinedEvents);
-    window.addEventListener("vivent-joined-events-updated", refreshJoinedEvents);
-
-    return () => {
-      window.removeEventListener("storage", refreshJoinedEvents);
-      window.removeEventListener("vivent-joined-events-updated", refreshJoinedEvents);
-    };
+    setLoadingJoined(true);
+    analyticsApi
+      .studentDashboard()
+      .then((data) => {
+        setJoinedEvents(data?.my_registrations || []);
+        setLoadingJoined(false);
+      })
+      .catch(() => setLoadingJoined(false));
   }, []);
+
+  // Fetch past event records
+  useEffect(() => {
+    if (activeView !== "records" && activeView !== "dashboard") return;
+    setLoadingPast(true);
+    recordsApi
+      .myEvents()
+      .then((data) => {
+        setPastEvents(data?.past_events || []);
+        setLoadingPast(false);
+      })
+      .catch(() => setLoadingPast(false));
+  }, [activeView]);
 
   const handleLogout = () => {
     localStorage.removeItem("viventAuth");
     localStorage.removeItem("viventAuthRole");
+    localStorage.removeItem("viventToken");
+    localStorage.removeItem("viventUser");
     navigate("/");
     window.location.reload();
   };
@@ -186,9 +155,7 @@ export const Studentpanel = () => {
               <nav className="space-y-3 p-5">
                 <button
                   className={sidebarButton}
-                  onClick={() => {
-                    setActiveView("dashboard");
-                  }}
+                  onClick={() => setActiveView("dashboard")}
                   type="button"
                 >
                   <span className="flex items-center gap-3">
@@ -209,27 +176,15 @@ export const Studentpanel = () => {
                     </span>
                   </button>
                   <div className="space-y-2">
-                    <button
-                      className={subButton}
-                      onClick={() => navigate("/jobfair")}
-                      type="button"
-                    >
+                    <button className={subButton} onClick={() => navigate("/jobfair")} type="button">
                       Job Fair
                       <FaChevronRight className="text-xs" />
                     </button>
-                    <button
-                      className={subButton}
-                      onClick={() => navigate("/foodevents")}
-                      type="button"
-                    >
+                    <button className={subButton} onClick={() => navigate("/foodevents")} type="button">
                       Food Events
                       <FaChevronRight className="text-xs" />
                     </button>
-                    <button
-                      className={subButton}
-                      onClick={() => navigate("/educationalexpo")}
-                      type="button"
-                    >
+                    <button className={subButton} onClick={() => navigate("/educationalexpo")} type="button">
                       Educational Expo
                       <FaChevronRight className="text-xs" />
                     </button>
@@ -246,18 +201,12 @@ export const Studentpanel = () => {
                       <FaClipboardList />
                       Records
                     </span>
-                    <FaChevronDown
-                      className={`transition ${recordOpen ? "rotate-180" : ""}`}
-                    />
+                    <FaChevronDown className={`transition ${recordOpen ? "rotate-180" : ""}`} />
                   </button>
 
                   {recordOpen && (
                     <div className="space-y-2 pl-3">
-                      <button
-                        className={subButton}
-                        onClick={() => setActiveView("records")}
-                        type="button"
-                      >
+                      <button className={subButton} onClick={() => setActiveView("records")} type="button">
                         Previous Events & Reviews
                         <FaChevronRight className="text-xs" />
                       </button>
@@ -294,23 +243,23 @@ export const Studentpanel = () => {
         <main className="flex-1 p-4 sm:p-6 lg:p-8">
           {pageTitle && (
             <section className="mb-7 rounded-2xl bg-white p-5 shadow-xl ring-1 ring-slate-200 sm:p-6">
-              <h2 className="text-2xl font-black text-slate-900 sm:text-3xl">
-                {pageTitle}
-              </h2>
+              <h2 className="text-2xl font-black text-slate-900 sm:text-3xl">{pageTitle}</h2>
             </section>
           )}
 
           {activeView === "social" ? (
             <SocialPromotion />
           ) : showJoined ? (
-            <JoinedEventsView joinedEvents={joinedEvents} />
+            <JoinedEventsView joinedEvents={joinedEvents} loading={loadingJoined} />
           ) : (
             <div className="space-y-6">
-              {showDashboard && <DashboardOverview />}
+              {showDashboard && <DashboardOverview pastEvents={pastEvents} loadingPast={loadingPast} />}
               {showRecords && (
                 <RecordsView
                   reviewWindow={reviewWindow}
                   setReviewWindow={setReviewWindow}
+                  pastEvents={pastEvents}
+                  loading={loadingPast}
                 />
               )}
             </div>
@@ -321,7 +270,9 @@ export const Studentpanel = () => {
   );
 };
 
-const JoinedEventsView = ({ joinedEvents }) => (
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+const JoinedEventsView = ({ joinedEvents, loading }) => (
   <section className="rounded-2xl bg-white p-5 shadow-xl ring-1 ring-slate-200 sm:p-6">
     <div className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
       <div>
@@ -335,75 +286,55 @@ const JoinedEventsView = ({ joinedEvents }) => (
       </span>
     </div>
 
-    {joinedEvents.length > 0 ? (
+    {loading ? (
+      <div className="rounded-2xl bg-blue-50 p-5 text-sm font-semibold text-blue-800">
+        Loading joined events…
+      </div>
+    ) : joinedEvents.length > 0 ? (
       <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
         {joinedEvents.map((item) => (
           <article
             className="flex h-full flex-col overflow-hidden rounded-2xl bg-slate-50 shadow-lg ring-1 ring-slate-200 transition duration-300 hover:-translate-y-1 hover:shadow-2xl"
-            key={item.eventKey || item.id}
+            key={item.id || item.event_id}
           >
             <div className="flex h-2 w-full bg-blue-800" />
             <div className="flex flex-1 flex-col p-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-blue-800/60">
-                    {item.type || "Joined Event"}
+                    {item.event?.category || "Joined Event"}
                   </p>
                   <h4 className="mt-2 text-lg font-black text-slate-900">
-                    {item.title}
+                    {item.event?.title || item.title || "Event"}
                   </h4>
-                  {item.company && (
+                  {item.event?.location && (
                     <p className="mt-1 text-sm font-semibold text-blue-800">
-                      {item.company}
+                      {item.event.location}
                     </p>
                   )}
                 </div>
                 <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-700">
-                  {item.status || "Joined"}
+                  {item.status || "Registered"}
                 </span>
               </div>
 
               <div className="mt-4 space-y-2 text-sm text-slate-600">
-                {item.location && (
+                {item.event?.location && (
                   <p>
                     <span className="font-semibold text-slate-800">Venue:</span>{" "}
-                    {item.location}
+                    {item.event.location}
                   </p>
                 )}
-                {item.applicantName && (
+                {item.event?.start_date && (
                   <p>
-                    <span className="font-semibold text-slate-800">Name:</span>{" "}
-                    {item.applicantName}
-                  </p>
-                )}
-                {item.email && (
-                  <p>
-                    <span className="font-semibold text-slate-800">Email:</span>{" "}
-                    {item.email}
-                  </p>
-                )}
-                {item.phone && (
-                  <p>
-                    <span className="font-semibold text-slate-800">Phone:</span>{" "}
-                    {item.phone}
-                  </p>
-                )}
-                {item.currentRole && (
-                  <p>
-                    <span className="font-semibold text-slate-800">Role:</span>{" "}
-                    {item.currentRole}
-                  </p>
-                )}
-                {item.ticketPrice && (
-                  <p>
-                    <span className="font-semibold text-slate-800">Ticket:</span>{" "}
-                    PKR {Number(item.ticketPrice).toLocaleString()}
+                    <span className="font-semibold text-slate-800">Date:</span>{" "}
+                    {new Date(item.event.start_date).toLocaleDateString()}
                   </p>
                 )}
                 <p>
-                  <span className="font-semibold text-slate-800">Joined At:</span>{" "}
-                  {item.submittedAt || item.joinedAt
-                    ? new Date(item.submittedAt || item.joinedAt).toLocaleString()
+                  <span className="font-semibold text-slate-800">Registered At:</span>{" "}
+                  {item.created_at
+                    ? new Date(item.created_at).toLocaleString()
                     : "Just now"}
                 </p>
               </div>
@@ -413,19 +344,19 @@ const JoinedEventsView = ({ joinedEvents }) => (
       </div>
     ) : (
       <div className="rounded-2xl bg-blue-50 p-5 text-sm font-semibold text-blue-800">
-        No joined events yet. When a user applies or joins a live event, it will
-        show here.
+        No joined events yet. When a user applies or joins a live event, it will show here.
       </div>
     )}
   </section>
 );
 
-const DashboardOverview = () => (
+const DashboardOverview = ({ pastEvents, loadingPast }) => (
   <section className="space-y-6">
     <AvailableEvents />
     <PreviousEventsTable
       title="Previous Events & Reviews"
-      events={previousEvents}
+      events={pastEvents}
+      loading={loadingPast}
     />
   </section>
 );
@@ -449,7 +380,6 @@ const AvailableEvents = () => (
     <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
       {availableEvents.map((event) => {
         const Icon = event.icon;
-
         return (
           <Link
             className="group flex h-full flex-col overflow-hidden rounded-2xl bg-slate-50 shadow-lg ring-1 ring-slate-200 transition duration-300 hover:-translate-y-1 hover:shadow-2xl"
@@ -471,12 +401,8 @@ const AvailableEvents = () => (
               </div>
             </div>
             <div className="flex flex-1 flex-col p-4 text-center">
-              <h4 className="text-xl font-black text-slate-900">
-                {event.title}
-              </h4>
-              <p className="mt-2 text-sm leading-6 text-slate-500">
-                {event.desc}
-              </p>
+              <h4 className="text-xl font-black text-slate-900">{event.title}</h4>
+              <p className="mt-2 text-sm leading-6 text-slate-500">{event.desc}</p>
               <span className="mt-auto inline-flex items-center justify-center gap-2 self-center rounded-full bg-blue-800 px-4 py-2.5 text-sm font-bold text-white transition duration-300 group-hover:bg-blue-900">
                 Open Page
                 <FaExternalLinkAlt className="text-xs" />
@@ -489,25 +415,19 @@ const AvailableEvents = () => (
   </section>
 );
 
-const RecordsView = ({ reviewWindow, setReviewWindow }) => (
+const RecordsView = ({ reviewWindow, setReviewWindow, pastEvents, loading }) => (
   <section className="space-y-6">
     <PreviousEventsTable
       title="Previous Events & Reviews"
-      events={previousEvents}
+      events={pastEvents}
       showOnlyRecent
       reviewWindow={reviewWindow}
       setReviewWindow={setReviewWindow}
       showFilter
+      loading={loading}
     />
   </section>
 );
-
-const isWithinLast7Days = (dateValue) => {
-  const date = new Date(`${dateValue}T00:00:00`);
-  const now = new Date("2026-05-22T00:00:00");
-  const diffDays = Math.floor((now - date) / (1000 * 60 * 60 * 24));
-  return diffDays >= 0 && diffDays <= 7;
-};
 
 const PreviousEventsTable = ({
   title,
@@ -516,9 +436,15 @@ const PreviousEventsTable = ({
   reviewWindow,
   setReviewWindow,
   showFilter = false,
+  loading = false,
 }) => {
   const rows = showOnlyRecent
-    ? events.filter((event) => isWithinLast7Days(event.date))
+    ? events.filter((event) => {
+        const date = new Date(event.end_date || event.start_date);
+        const now = new Date();
+        const diffDays = Math.floor((now - date) / (1000 * 60 * 60 * 24));
+        return diffDays >= 0 && diffDays <= reviewWindow;
+      })
     : events;
 
   return (
@@ -528,9 +454,7 @@ const PreviousEventsTable = ({
           <div>
             <h3 className="text-xl font-black text-slate-900">{title}</h3>
             <p className="text-sm text-slate-500">
-              {showOnlyRecent
-                ? "Seven day event records."
-                : "Completed event records."}
+              {showOnlyRecent ? "Seven day event records." : "Completed event records."}
             </p>
           </div>
         )}
@@ -547,112 +471,190 @@ const PreviousEventsTable = ({
         )}
       </div>
       <div className="max-w-full overflow-x-auto">
-        <table className="w-full min-w-[820px] border-separate border-spacing-y-2">
-          <thead>
-            <tr className="text-left text-[11px] uppercase tracking-[0.18em] text-blue-800">
-              <th className="px-3 py-2">Event</th>
-              <th className="px-3 py-2">Category</th>
-              <th className="px-3 py-2">Date</th>
-              <th className="px-3 py-2">Venue</th>
-              <th className="px-3 py-2">Attendees</th>
-              <th className="px-3 py-2">Status</th>
-              <th className="px-3 py-2">Public Reviews</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((item) => (
-              <tr className="bg-slate-50 shadow-sm" key={item.id}>
-                <td className="rounded-l-2xl px-3 py-3.5 text-sm font-bold text-slate-900">
-                  {item.title}
-                </td>
-                <td className="px-3 py-3.5 text-sm text-slate-700">
-                  {item.category}
-                </td>
-                <td className="px-3 py-3.5 text-sm text-slate-700">
-                  {item.date}
-                </td>
-                <td className="px-3 py-3.5 text-sm text-slate-700">
-                  {item.venue}
-                </td>
-                <td className="px-3 py-3.5 text-sm text-slate-700">
-                  {item.attendees}
-                </td>
-                <td className="px-3 py-3.5">
-                  <span className="inline-flex rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-700">
-                    {item.status}
-                  </span>
-                </td>
-                <td className="rounded-r-2xl px-3 py-3.5">
-                  <div className="space-y-2 text-xs leading-5 text-slate-600">
-                    {item.reviews?.map((review) => (
-                      <p
-                        className="rounded-xl bg-white px-3 py-2 text-[11px] font-medium leading-5 text-slate-600"
-                        key={review}
-                      >
-                        {review}
-                      </p>
-                    ))}
-                  </div>
-                </td>
+        {loading ? (
+          <p className="py-4 text-sm text-slate-400">Loading records…</p>
+        ) : rows.length === 0 ? (
+          <p className="py-4 text-sm text-slate-400">No past events to display.</p>
+        ) : (
+          <table className="w-full min-w-[820px] border-separate border-spacing-y-2">
+            <thead>
+              <tr className="text-left text-[11px] uppercase tracking-[0.18em] text-blue-800">
+                <th className="px-3 py-2">Event</th>
+                <th className="px-3 py-2">Category</th>
+                <th className="px-3 py-2">Date</th>
+                <th className="px-3 py-2">Venue</th>
+                <th className="px-3 py-2">Attendees</th>
+                <th className="px-3 py-2">Status</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {rows.map((item) => (
+                <tr className="bg-slate-50 shadow-sm" key={item.id}>
+                  <td className="rounded-l-2xl px-3 py-3.5 text-sm font-bold text-slate-900">
+                    {item.title}
+                  </td>
+                  <td className="px-3 py-3.5 text-sm text-slate-700">
+                    {item.category}
+                  </td>
+                  <td className="px-3 py-3.5 text-sm text-slate-700">
+                    {item.start_date
+                      ? new Date(item.start_date).toLocaleDateString()
+                      : "TBD"}
+                  </td>
+                  <td className="px-3 py-3.5 text-sm text-slate-700">
+                    {item.location || "TBD"}
+                  </td>
+                  <td className="px-3 py-3.5 text-sm text-slate-700">
+                    {item.current_participants || 0}
+                  </td>
+                  <td className="rounded-r-2xl px-3 py-3.5">
+                    <span className="inline-flex rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-700">
+                      {item.status || "Completed"}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </section>
   );
 };
 
-const SocialPromotion = () => (
-  <section className="space-y-6">
-    <div className="grid gap-4 lg:grid-cols-3">
-      {promotionPlans.map((plan) => (
-        <article
-          className={`flex h-full min-h-[380px] flex-col rounded-2xl bg-white p-4 shadow-xl ring-1 transition duration-300 hover:-translate-y-1 hover:shadow-2xl ${
-            plan.highlighted ? "ring-blue-800" : "ring-slate-200"
-          }`}
-          key={plan.name}
-        >
-          <div className="mb-4 flex items-start justify-between gap-4">
-            <div>
-              <h3 className="text-xl font-black text-slate-900">
-                {plan.name}
-              </h3>
-              <p className="mt-1 text-xs font-bold uppercase tracking-[0.18em] text-blue-800">
-                {plan.posts}
+const SocialPromotion = () => {
+  const [plans, setPlans] = useState([]);
+  const [activePlanId, setActivePlanId] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [selectingId, setSelectingId] = useState(null);
+  const [message, setMessage] = useState("");
+
+  // Load available plans + current subscription in parallel
+  useEffect(() => {
+    Promise.all([
+      plansApi.list().catch(() => []),
+      subscriptionsApi.me().catch(() => null),
+    ]).then(([planData, sub]) => {
+      setPlans(planData || []);
+      if (sub?.plan_id) setActivePlanId(sub.plan_id);
+      setLoading(false);
+    });
+  }, []);
+
+  // Auto-clear toast after 3 s
+  useEffect(() => {
+    if (!message) return undefined;
+    const t = setTimeout(() => setMessage(""), 3000);
+    return () => clearTimeout(t);
+  }, [message]);
+
+  const handleSelectPlan = async (planId) => {
+    setSelectingId(planId);
+    try {
+      const res = await subscriptionsApi.subscribe(planId);
+      setActivePlanId(res.plan_id);
+      setMessage(`✓ ${res.plan?.name || "Plan"} activated successfully!`);
+    } catch (err) {
+      setMessage(`Error: ${err.message}`);
+    } finally {
+      setSelectingId(null);
+    }
+  };
+
+  // Map backend plan to display shape (preserves UI labels)
+  const displayPlans = plans.map((p, idx) => ({
+    id: p.id,
+    name: p.name,
+    price: `$${parseFloat(p.price).toFixed(0)}`,
+    posts: p.facilities?.posts || `${7 + idx * 5} Posts on Social Media`,
+    features: p.facilities?.features || [
+      "All starter features +",
+      "Social media strategy",
+      "Content Creation",
+      "On Facebook, Instagram",
+    ],
+    highlighted: idx === 1,  // middle plan = highlighted
+  }));
+
+  if (loading) {
+    return (
+      <section className="space-y-6">
+        <div className="rounded-2xl bg-white p-8 text-center text-blue-800 shadow-xl ring-1 ring-slate-200">
+          Loading plans…
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="space-y-6">
+      {message && (
+        <div className="fixed bottom-24 right-5 z-[80] rounded-2xl bg-blue-800 px-4 py-3 text-sm font-bold text-white shadow-2xl">
+          {message}
+        </div>
+      )}
+      <div className="grid gap-4 lg:grid-cols-3">
+        {displayPlans.map((plan) => {
+          const isActive = plan.id === activePlanId;
+          const isSelecting = selectingId === plan.id;
+          return (
+            <article
+              className={`flex h-full min-h-[380px] flex-col rounded-2xl bg-white p-4 shadow-xl ring-1 transition duration-300 hover:-translate-y-1 hover:shadow-2xl ${
+                isActive ? "ring-emerald-500" : plan.highlighted ? "ring-blue-800" : "ring-slate-200"
+              }`}
+              key={plan.id || plan.name}
+            >
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-xl font-black text-slate-900">{plan.name}</h3>
+                  <p className="mt-1 text-xs font-bold uppercase tracking-[0.18em] text-blue-800">
+                    {plan.posts}
+                  </p>
+                </div>
+                {isActive && (
+                  <span className="rounded-lg bg-emerald-500 px-2.5 py-1.5 text-[11px] font-black text-white">
+                    Active
+                  </span>
+                )}
+                {!isActive && plan.highlighted && (
+                  <span className="rounded-lg bg-blue-800 px-2.5 py-1.5 text-[11px] font-black text-white">
+                    Popular
+                  </span>
+                )}
+              </div>
+
+              <p className="mb-4 text-3xl font-black text-blue-800">
+                {plan.price}
+                <span className="text-sm font-bold text-slate-500"> / month</span>
               </p>
-            </div>
-            {plan.highlighted && (
-              <span className="rounded-lg bg-blue-800 px-2.5 py-1.5 text-[11px] font-black text-white">
-                Popular
-              </span>
-            )}
-          </div>
 
-          <p className="mb-4 text-3xl font-black text-blue-800">
-            {plan.price}
-            <span className="text-sm font-bold text-slate-500"> / month</span>
-          </p>
+              <ul className="space-y-2.5 text-xs leading-5 text-slate-600">
+                {plan.features.map((feature) => (
+                  <li className="flex gap-3" key={feature}>
+                    <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-blue-800" />
+                    {feature}
+                  </li>
+                ))}
+              </ul>
 
-          <ul className="space-y-2.5 text-xs leading-5 text-slate-600">
-            {plan.features.map((feature) => (
-              <li className="flex gap-3" key={feature}>
-                <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-blue-800" />
-                {feature}
-              </li>
-            ))}
-          </ul>
-
-          <button
-            className="mt-5 w-full rounded-xl bg-blue-800 px-4 py-3 text-sm font-bold text-white shadow-lg transition duration-300 hover:bg-blue-900"
-            type="button"
-          >
-            Select Plan
-          </button>
-        </article>
-      ))}
-    </div>
-  </section>
-);
+              <button
+                className={`mt-5 w-full rounded-xl px-4 py-3 text-sm font-bold text-white shadow-lg transition duration-300 disabled:opacity-60 ${
+                  isActive
+                    ? "bg-emerald-500 hover:bg-emerald-600"
+                    : "bg-blue-800 hover:bg-blue-900"
+                }`}
+                onClick={() => handleSelectPlan(plan.id)}
+                disabled={isSelecting || isActive}
+                type="button"
+              >
+                {isSelecting ? "Activating…" : isActive ? "Current Plan" : "Select Plan"}
+              </button>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+};
 
 export default Studentpanel;

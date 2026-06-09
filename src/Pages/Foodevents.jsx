@@ -1,11 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { FaMapMarkerAlt, FaTimes, FaUtensils } from "react-icons/fa";
-import { showcaseEvents } from "../data/eventCatalog";
-import {
-  loadJoinedEvents,
-  saveJoinedEvent,
-} from "../utils/joinedEvents";
-import { loadCreatedEventsByCategory } from "../utils/createdEvents";
+import { eventsApi, registrationsApi, paymentsApi } from "../utils/api";
 
 const initialFoodForm = {
   attendeeName: "",
@@ -18,69 +13,53 @@ const initialFoodForm = {
 };
 
 const Foodevents = () => {
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [showPaymentConfirm, setShowPaymentConfirm] = useState(false);
   const [paymentResult, setPaymentResult] = useState("");
   const [paidEventId, setPaidEventId] = useState(null);
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [joinForm, setJoinForm] = useState(initialFoodForm);
-  const [joinedEventIds, setJoinedEventIds] = useState([]);
-  const [customFoodEvents, setCustomFoodEvents] = useState([]);
+  const [registeredIds, setRegisteredIds] = useState(new Set());
+  const [submitting, setSubmitting] = useState(false);
+  const [payingId, setPayingId] = useState(null);
 
   const ticketText = useMemo(() => {
     if (!selectedTicket) return "";
-    return `PKR ${selectedTicket.ticketPrice.toLocaleString()}`;
+    const price = selectedTicket.venue_details?.ticket_price || 0;
+    return `PKR ${Number(price).toLocaleString()}`;
   }, [selectedTicket]);
 
   useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    eventsApi
+      .list({ category: "food", status: "approved", page_size: 100 })
+      .then((res) => {
+        if (!cancelled) {
+          setEvents(res?.items || []);
+          setLoading(false);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setError(err.message || "Failed to load food events.");
+          setLoading(false);
+        }
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
     if (!paymentResult) return undefined;
-
-    const timer = setTimeout(() => {
-      setPaymentResult("");
-    }, 3000);
-
+    const timer = setTimeout(() => setPaymentResult(""), 3000);
     return () => clearTimeout(timer);
   }, [paymentResult]);
 
-  useEffect(() => {
-    const refreshJoinedEvents = () => {
-      const joinedIds = loadJoinedEvents()
-        .filter((entry) => entry.type === "Food Event" && entry.eventKey?.startsWith("food-events-"))
-        .map((entry) => entry.eventKey.replace("food-events-", ""));
-
-      setJoinedEventIds(joinedIds);
-    };
-
-    refreshJoinedEvents();
-    window.addEventListener("storage", refreshJoinedEvents);
-    window.addEventListener("vivent-joined-events-updated", refreshJoinedEvents);
-
-    return () => {
-      window.removeEventListener("storage", refreshJoinedEvents);
-      window.removeEventListener("vivent-joined-events-updated", refreshJoinedEvents);
-    };
-  }, []);
-
-  useEffect(() => {
-    const refreshCreatedEvents = () => {
-      setCustomFoodEvents(loadCreatedEventsByCategory("food-events"));
-    };
-
-    refreshCreatedEvents();
-    window.addEventListener("storage", refreshCreatedEvents);
-    window.addEventListener("vivent-created-events-updated", refreshCreatedEvents);
-
-    return () => {
-      window.removeEventListener("storage", refreshCreatedEvents);
-      window.removeEventListener("vivent-created-events-updated", refreshCreatedEvents);
-    };
-  }, []);
-
   const updateField = (field, value) => {
-    setJoinForm((current) => ({
-      ...current,
-      [field]: value,
-    }));
+    setJoinForm((current) => ({ ...current, [field]: value }));
   };
 
   const closeJoinForm = () => {
@@ -88,35 +67,47 @@ const Foodevents = () => {
     setJoinForm(initialFoodForm);
   };
 
-  const submitFoodJoin = (event) => {
-    event.preventDefault();
-
+  const submitFoodJoin = async (e) => {
+    e.preventDefault();
     if (!selectedEvent) return;
-
-    saveJoinedEvent({
-      eventKey: `food-events-${selectedEvent.id}`,
-      type: "Food Event",
-      title: selectedEvent.title,
-      company: selectedEvent.company,
-      location: selectedEvent.location,
-      attendeeName: joinForm.attendeeName,
-      email: joinForm.email,
-      phone: joinForm.phone,
-      cuisinePreference: joinForm.cuisinePreference,
-      guestCount: joinForm.guestCount,
-      dietaryPreference: joinForm.dietaryPreference,
-      specialRequest: joinForm.specialRequest,
-      status: "Joined",
-      ticketPrice: selectedEvent.ticketPrice,
-      joinedAt: new Date().toISOString(),
-    });
-
-    setPaymentResult(`${selectedEvent.title} joined successfully.`);
-    setJoinedEventIds((current) =>
-      current.includes(selectedEvent.id) ? current : [...current, selectedEvent.id]
-    );
-    closeJoinForm();
+    setSubmitting(true);
+    try {
+      await registrationsApi.register(selectedEvent.id, "participant");
+      setRegisteredIds((prev) => new Set([...prev, selectedEvent.id]));
+      setPaymentResult(`${selectedEvent.title} joined successfully.`);
+    } catch (err) {
+      setPaymentResult(`Error: ${err.message}`);
+    } finally {
+      setSubmitting(false);
+      closeJoinForm();
+    }
   };
+
+  const handlePayConfirm = async () => {
+    if (!selectedTicket) return;
+    setPayingId(selectedTicket.id);
+    try {
+      const ticketPrice = selectedTicket.venue_details?.ticket_price || 1;
+      await paymentsApi.initiate(selectedTicket.id, ticketPrice, "card");
+      setPaymentResult(`${selectedTicket.title} ticket purchased successfully.`);
+      setPaidEventId(selectedTicket.id);
+    } catch (err) {
+      setPaymentResult(`Payment error: ${err.message}`);
+    } finally {
+      setPayingId(null);
+      setSelectedTicket(null);
+      setShowPaymentConfirm(false);
+    }
+  };
+
+  const normalizeEvent = (item) => ({
+    ...item,
+    company: item.venue_details?.company || item.location || "Organizer",
+    location: item.location,
+    image:
+      item.venue_details?.image_url ||
+      "https://images.unsplash.com/photo-1504674900247-0877df9cc836?q=80&w=1974",
+  });
 
   return (
     <div className="bg-gray-100">
@@ -130,7 +121,6 @@ const Foodevents = () => {
         }}
       >
         <div className="absolute inset-0 bg-blue-900/75" />
-
         <div className="relative z-10 mx-auto max-w-6xl px-6 text-center">
           <p className="mb-4 font-semibold tracking-[4px] text-white">
             FOOD FESTIVAL EVENTS
@@ -160,109 +150,113 @@ const Foodevents = () => {
         </div>
 
         <div className="mx-auto max-w-5xl space-y-5 px-6">
-          {[...customFoodEvents, ...showcaseEvents.foodEvents].map((item) => (
-            <article
-              className="group overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-md transition-all duration-300 hover:shadow-xl"
-              key={item.id || item.title}
-            >
-              <div className="flex flex-col items-center lg:flex-row">
-                <div className="relative w-full overflow-hidden lg:w-[35%]">
-                  <img
-                    alt={item.title}
-                    className="h-[190px] w-full object-cover transition duration-500 group-hover:scale-105"
-                    src={item.image}
-                  />
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent" />
-                </div>
-
-                <div className="w-full p-5 lg:w-[65%] lg:p-7">
-                  <div className="mb-4 inline-flex items-center gap-2 rounded-full bg-blue-50 px-3.5 py-1.5 text-blue-800">
-                    <FaUtensils />
-                    <span className="text-xs font-semibold">Premium Food Event</span>
-                  </div>
-
-                  <h2 className="mb-3 text-2xl font-bold leading-snug text-blue-800 md:text-3xl">
-                    {item.title}
-                  </h2>
-                  <p className="mb-3 text-base font-medium text-black-800 md:text-lg">
-                    {item.company}
-                  </p>
-
-                  <div className="mb-4 flex items-center gap-3 text-black-500">
-                    <FaMapMarkerAlt className="text-lg text-pink-500" />
-                    <span className="text-sm md:text-base">{item.location}</span>
-                  </div>
-
-                  <div className="mb-5 flex items-center gap-4">
-                    <div className="flex -space-x-3">
+          {loading && (
+            <div className="rounded-2xl bg-white p-8 text-center text-blue-800 shadow-md">
+              Loading food events…
+            </div>
+          )}
+          {error && (
+            <div className="rounded-2xl bg-red-50 p-8 text-center text-red-600 shadow-md">
+              {error}
+            </div>
+          )}
+          {!loading && !error && events.length === 0 && (
+            <div className="rounded-2xl bg-white p-8 text-center text-slate-500 shadow-md">
+              No food events available at this time.
+            </div>
+          )}
+          {!loading &&
+            events.map((rawItem) => {
+              const item = normalizeEvent(rawItem);
+              const isRegistered = registeredIds.has(item.id);
+              return (
+                <article
+                  className="group overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-md transition-all duration-300 hover:shadow-xl"
+                  key={item.id}
+                >
+                  <div className="flex flex-col items-center lg:flex-row">
+                    <div className="relative w-full overflow-hidden lg:w-[35%]">
                       <img
-                        alt=""
-                        src="https://randomuser.me/api/portraits/men/32.jpg"
-                        className="h-11 w-11 rounded-full border-4 border-white"
+                        alt={item.title}
+                        className="h-[190px] w-full object-cover transition duration-500 group-hover:scale-105"
+                        src={item.image}
                       />
-                      <img
-                        alt=""
-                        src="https://randomuser.me/api/portraits/women/44.jpg"
-                        className="h-11 w-11 rounded-full border-4 border-white"
-                      />
-                      <img
-                        alt=""
-                        src="https://randomuser.me/api/portraits/men/41.jpg"
-                        className="h-11 w-11 rounded-full border-4 border-white"
-                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent" />
                     </div>
-                    <div>
-                      <h4 className="text-sm font-semibold text-blue-800 md:text-base">
-                        Food Lovers Joined
-                      </h4>
-                      <p className="text-xs text-black-500 md:text-sm">
-                        Thousands of Visitors
+
+                    <div className="w-full p-5 lg:w-[65%] lg:p-7">
+                      <div className="mb-4 inline-flex items-center gap-2 rounded-full bg-blue-50 px-3.5 py-1.5 text-blue-800">
+                        <FaUtensils />
+                        <span className="text-xs font-semibold">Premium Food Event</span>
+                      </div>
+
+                      <h2 className="mb-3 text-2xl font-bold leading-snug text-blue-800 md:text-3xl">
+                        {item.title}
+                      </h2>
+                      <p className="mb-3 text-base font-medium text-black-800 md:text-lg">
+                        {item.company}
                       </p>
+
+                      <div className="mb-4 flex items-center gap-3 text-black-500">
+                        <FaMapMarkerAlt className="text-lg text-pink-500" />
+                        <span className="text-sm md:text-base">{item.location}</span>
+                      </div>
+
+                      <div className="mb-5 flex items-center gap-4">
+                        <div className="flex -space-x-3">
+                          <img alt="" src="https://randomuser.me/api/portraits/men/32.jpg" className="h-11 w-11 rounded-full border-4 border-white" />
+                          <img alt="" src="https://randomuser.me/api/portraits/women/44.jpg" className="h-11 w-11 rounded-full border-4 border-white" />
+                          <img alt="" src="https://randomuser.me/api/portraits/men/41.jpg" className="h-11 w-11 rounded-full border-4 border-white" />
+                        </div>
+                        <div>
+                          <h4 className="text-sm font-semibold text-blue-800 md:text-base">Food Lovers Joined</h4>
+                          <p className="text-xs text-black-500 md:text-sm">Thousands of Visitors</p>
+                        </div>
+                      </div>
+
+                      <p className="mb-5 max-w-2xl text-sm leading-relaxed text-black-500 md:text-base">
+                        {item.description ||
+                          "Enjoy premium cuisines, live cooking experiences, cultural dishes, and exciting food festivals through VIVENT. Connect with food brands, chefs, and culinary experts."}
+                      </p>
+
+                      <div className="flex flex-wrap gap-3">
+                        <button
+                          className={`min-w-32 rounded-full px-6 py-3 text-sm font-semibold text-white shadow-lg transition-all duration-300 hover:scale-105 ${
+                            isRegistered
+                              ? "cursor-default bg-emerald-600 hover:bg-emerald-700"
+                              : "bg-blue-800 hover:bg-blue-900"
+                          }`}
+                          onClick={() => {
+                            if (isRegistered) return;
+                            if (paidEventId === item.id) {
+                              setSelectedEvent(item);
+                              setJoinForm(initialFoodForm);
+                            } else {
+                              setPaymentResult("Please purchase the ticket first.");
+                            }
+                          }}
+                          disabled={isRegistered}
+                          type="button"
+                        >
+                          {isRegistered ? "Joined" : "Join Event"}
+                        </button>
+                        <button
+                          className="min-w-32 rounded-full border border-blue-800 px-6 py-3 text-sm font-semibold text-blue-800 transition duration-300 hover:bg-blue-50"
+                          onClick={() => {
+                            setPaymentResult("");
+                            setSelectedTicket(item);
+                            setShowPaymentConfirm(false);
+                          }}
+                          type="button"
+                        >
+                          Ticket
+                        </button>
+                      </div>
                     </div>
                   </div>
-
-                  <p className="mb-5 max-w-2xl text-sm leading-relaxed text-black-500 md:text-base">
-                    {item.description ||
-                      "Enjoy premium cuisines, live cooking experiences, cultural dishes, and exciting food festivals through VIVENT. Connect with food brands, chefs, and culinary experts."}
-                  </p>
-
-                  <div className="flex flex-wrap gap-3">
-                    <button
-                      className={`min-w-32 rounded-full px-6 py-3 text-sm font-semibold text-white shadow-lg transition-all duration-300 hover:scale-105 ${
-                        joinedEventIds.includes(item.id)
-                          ? "cursor-default bg-emerald-600 hover:bg-emerald-700"
-                          : "bg-blue-800 hover:bg-blue-900"
-                      }`}
-                      onClick={() => {
-                        if (joinedEventIds.includes(item.id)) return;
-                        if (paidEventId === item.id) {
-                          setSelectedEvent(item);
-                          setJoinForm(initialFoodForm);
-                          return;
-                        }
-                        setPaymentResult("Please purchase the ticket first.");
-                      }}
-                      disabled={joinedEventIds.includes(item.id)}
-                      type="button"
-                    >
-                      {joinedEventIds.includes(item.id) ? "Joined" : "Join Event"}
-                    </button>
-                    <button
-                      className="min-w-32 rounded-full border border-blue-800 px-6 py-3 text-sm font-semibold text-blue-800 transition duration-300 hover:bg-blue-50"
-                      onClick={() => {
-                        setPaymentResult("");
-                        setSelectedTicket(item);
-                        setShowPaymentConfirm(false);
-                      }}
-                      type="button"
-                    >
-                      Ticket
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </article>
-          ))}
+                </article>
+              );
+            })}
         </div>
       </section>
 
@@ -286,10 +280,7 @@ const Foodevents = () => {
               </div>
               <button
                 className="grid h-10 w-10 place-items-center rounded-xl bg-blue-50 text-blue-800 transition hover:bg-blue-100"
-                onClick={() => {
-                  setSelectedTicket(null);
-                  setShowPaymentConfirm(false);
-                }}
+                onClick={() => { setSelectedTicket(null); setShowPaymentConfirm(false); }}
                 type="button"
               >
                 <FaTimes />
@@ -304,10 +295,7 @@ const Foodevents = () => {
             <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-end">
               <button
                 className="rounded-xl bg-slate-100 px-4 py-2.5 text-sm font-bold text-slate-700 transition hover:bg-slate-200"
-                onClick={() => {
-                  setSelectedTicket(null);
-                  setShowPaymentConfirm(false);
-                }}
+                onClick={() => { setSelectedTicket(null); setShowPaymentConfirm(false); }}
                 type="button"
               >
                 Cancel
@@ -340,16 +328,12 @@ const Foodevents = () => {
                 Cancel
               </button>
               <button
-                className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-emerald-700"
-                onClick={() => {
-                  setPaymentResult(`${selectedTicket.title} ticket purchased successfully.`);
-                  setPaidEventId(selectedTicket.id);
-                  setSelectedTicket(null);
-                  setShowPaymentConfirm(false);
-                }}
+                className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-emerald-700 disabled:opacity-60"
+                onClick={handlePayConfirm}
+                disabled={payingId === selectedTicket?.id}
                 type="button"
               >
-                Yes
+                {payingId === selectedTicket?.id ? "Processing…" : "Yes"}
               </button>
             </div>
           </div>
@@ -383,91 +367,38 @@ const Foodevents = () => {
             <div className="mt-4 grid gap-3 md:grid-cols-2">
               <label className="block text-sm font-bold text-blue-800">
                 Full Name
-                <input
-                  className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-800"
-                  onChange={(e) => updateField("attendeeName", e.target.value)}
-                  required
-                  value={joinForm.attendeeName}
-                />
+                <input className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-800" onChange={(e) => updateField("attendeeName", e.target.value)} required value={joinForm.attendeeName} />
               </label>
-
               <label className="block text-sm font-bold text-blue-800">
                 Email
-                <input
-                  className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-800"
-                  onChange={(e) => updateField("email", e.target.value)}
-                  required
-                  type="email"
-                  value={joinForm.email}
-                />
+                <input className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-800" onChange={(e) => updateField("email", e.target.value)} required type="email" value={joinForm.email} />
               </label>
-
               <label className="block text-sm font-bold text-blue-800">
                 Phone
-                <input
-                  className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-800"
-                  onChange={(e) => updateField("phone", e.target.value)}
-                  required
-                  value={joinForm.phone}
-                />
+                <input className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-800" onChange={(e) => updateField("phone", e.target.value)} required value={joinForm.phone} />
               </label>
-
               <label className="block text-sm font-bold text-blue-800">
                 Cuisine Preference
-                <input
-                  className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-black placeholder:text-black outline-none focus:border-blue-800"
-                  onChange={(e) => updateField("cuisinePreference", e.target.value)}
-                  placeholder="BBQ, Italian, desserts..."
-                  value={joinForm.cuisinePreference}
-                />
+                <input className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-black placeholder:text-black outline-none focus:border-blue-800" onChange={(e) => updateField("cuisinePreference", e.target.value)} placeholder="BBQ, Italian, desserts..." value={joinForm.cuisinePreference} />
               </label>
-
               <label className="block text-sm font-bold text-blue-800">
                 Guest Count
-                <input
-                  className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-800"
-                  min="1"
-                  onChange={(e) => updateField("guestCount", e.target.value)}
-                  placeholder="1"
-                  type="number"
-                  value={joinForm.guestCount}
-                />
+                <input className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-800" min="1" onChange={(e) => updateField("guestCount", e.target.value)} placeholder="1" type="number" value={joinForm.guestCount} />
               </label>
-
               <label className="block text-sm font-bold text-blue-800">
                 Dietary Preference
-                <input
-                  className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-black placeholder:text-black outline-none focus:border-blue-800"
-                  onChange={(e) => updateField("dietaryPreference", e.target.value)}
-                  placeholder="Halal, vegetarian, vegan..."
-                  value={joinForm.dietaryPreference}
-                />
+                <input className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-black placeholder:text-black outline-none focus:border-blue-800" onChange={(e) => updateField("dietaryPreference", e.target.value)} placeholder="Halal, vegetarian, vegan..." value={joinForm.dietaryPreference} />
               </label>
-
               <label className="block text-sm font-bold text-blue-800 md:col-span-2">
                 Special Request
-                <textarea
-                  className="mt-2 min-h-24 w-full rounded-xl border border-slate-200 px-3 py-2.5 outline-none focus:border-blue-800"
-                  onChange={(e) => updateField("specialRequest", e.target.value)}
-                  placeholder="Any seating or event preference..."
-                  value={joinForm.specialRequest}
-                />
+                <textarea className="mt-2 min-h-24 w-full rounded-xl border border-slate-200 px-3 py-2.5 outline-none focus:border-blue-800" onChange={(e) => updateField("specialRequest", e.target.value)} placeholder="Any seating or event preference..." value={joinForm.specialRequest} />
               </label>
             </div>
 
             <div className="sticky bottom-0 mt-4 flex flex-col gap-3 bg-white pt-3 sm:flex-row sm:justify-end">
-              <button
-                className="rounded-xl bg-slate-100 px-4 py-2 text-sm font-bold text-slate-700 transition hover:bg-slate-200"
-                onClick={closeJoinForm}
-                type="button"
-              >
-                Cancel
-              </button>
-              <button
-                className="rounded-xl bg-blue-800 px-5 py-2 text-sm font-bold text-white transition hover:bg-blue-900"
-                type="submit"
-              >
-                Submit
+              <button className="rounded-xl bg-slate-100 px-4 py-2 text-sm font-bold text-slate-700 transition hover:bg-slate-200" onClick={closeJoinForm} type="button">Cancel</button>
+              <button className="rounded-xl bg-blue-800 px-5 py-2 text-sm font-bold text-white transition hover:bg-blue-900 disabled:opacity-60" type="submit" disabled={submitting}>
+                {submitting ? "Submitting…" : "Submit"}
               </button>
             </div>
           </form>

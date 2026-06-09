@@ -37,8 +37,8 @@ export const Contact = () => {
                   {
                     icon: <FaFacebookF />,
                     label: "Facebook",
-                    handle: "@vivent_web",
-                    href: "https://www.facebook.com/vivent_web",
+                    handle: "Viventplatform",
+                    href: "https://www.facebook.com/share/1Ft32wUfWm/",
                     className: "bg-blue-50 text-blue-800 border border-blue-100",
                   },
                   {
@@ -52,8 +52,8 @@ export const Contact = () => {
                   {
                     icon: <FaLinkedinIn />,
                     label: "LinkedIn",
-                    handle: "@vivent_web",
-                    href: "https://www.linkedin.com/in/vivent_web",
+                    handle: "@vivent-web",
+                    href: "https://www.linkedin.com/in/vivent-web",
                     className: "bg-sky-50 text-sky-700 border border-sky-100",
                   },
                   {

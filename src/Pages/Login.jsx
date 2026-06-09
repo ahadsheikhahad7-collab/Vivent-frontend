@@ -1,15 +1,12 @@
 import React, { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { FaEnvelope, FaGoogle } from "react-icons/fa";
-import {
-  findUserByEmail,
-  findUserForLogin,
-  updateUserPassword,
-} from "../utils/authStorage";
+import api from "../utils/api";
 
 const rolePath = (role) => {
   if (role === "student") return "/studentpanel";
   if (role === "business") return "/businesspanel";
+  if (role === "admin") return "/adminpanel";
   return "/";
 };
 
@@ -30,6 +27,8 @@ const Login = ({ onAuth }) => {
   });
   const [resetMessage, setResetMessage] = useState("");
   const [resetError, setResetError] = useState("");
+  const [loginError, setLoginError] = useState("");
+  const [loading, setLoading] = useState(false);
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -40,38 +39,52 @@ const Login = ({ onAuth }) => {
       ...current,
       [event.target.name]: event.target.value,
     }));
+    setLoginError("");
   };
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault();
+    setLoginError("");
+    setLoading(true);
 
-    const matchedUser = findUserForLogin({
-      identifier: formData.username,
-      password: formData.password,
-      accountType: formData.accountType,
-    });
+    try {
+      const data = await api.auth.login(formData.username, formData.password);
+      // data = { access_token, token_type, expires_in_hours, user }
+      const user = data.user;
+      const role = user?.role || formData.accountType;
 
-    if (matchedUser) {
-      onAuth(formData.accountType);
-      navigate(rolePath(formData.accountType) || redirectPath, { replace: true });
-      return;
+      // Validate that the selected account type matches the actual role
+      if (
+        formData.accountType &&
+        formData.accountType !== role &&
+        role !== "admin"
+      ) {
+        setLoginError(
+          `This account is registered as "${role}", not "${formData.accountType}". Please select the correct account type.`
+        );
+        setLoading(false);
+        return;
+      }
+
+      // Persist auth state
+      localStorage.setItem("viventToken", data.access_token);
+      localStorage.setItem("viventAuth", "true");
+      localStorage.setItem("viventAuthRole", role);
+      localStorage.setItem("viventUser", JSON.stringify(user));
+
+      onAuth(role);
+      navigate(rolePath(role) || redirectPath, { replace: true });
+    } catch (err) {
+      setLoginError(err.message || "Login failed. Please check your credentials.");
+    } finally {
+      setLoading(false);
     }
-
-    const rawUsers = localStorage.getItem("viventUsers");
-    const fallbackLogin = rawUsers === null || rawUsers === "[]";
-
-    if (fallbackLogin) {
-      onAuth(formData.accountType);
-      navigate(rolePath(formData.accountType) || redirectPath, { replace: true });
-      return;
-    }
-
-    setResetError("Invalid username/email, password, or account type.");
   };
 
   const openForgotPassword = () => {
-    setResetError("");
+    setLoginError("");
     setResetMessage("");
+    setResetError("");
     setResetState((current) => ({
       ...current,
       email: current.email || (formData.username.includes("@") ? formData.username : ""),
@@ -86,18 +99,10 @@ const Login = ({ onAuth }) => {
 
   const sendOtp = () => {
     const email = resetState.email.trim().toLowerCase();
-
     if (!email) {
       setResetError("Please enter your email first.");
       return;
     }
-
-    const user = findUserByEmail(email);
-    if (!user) {
-      setResetError("No account found with this email.");
-      return;
-    }
-
     const generatedOtp = String(Math.floor(100000 + Math.random() * 900000));
     setResetState((current) => ({
       ...current,
@@ -113,11 +118,7 @@ const Login = ({ onAuth }) => {
       setResetError("Invalid OTP. Please try again.");
       return;
     }
-
-    setResetState((current) => ({
-      ...current,
-      step: "password",
-    }));
+    setResetState((current) => ({ ...current, step: "password" }));
     setResetMessage("OTP verified. Now enter your new password.");
     setResetError("");
   };
@@ -127,21 +128,15 @@ const Login = ({ onAuth }) => {
       setResetError("Please enter and confirm your new password.");
       return;
     }
-
     if (resetState.newPassword !== resetState.confirmPassword) {
       setResetError("Passwords do not match.");
       return;
     }
-
-    updateUserPassword(resetState.email, resetState.newPassword);
-    setResetMessage("Password updated successfully. You can now log in.");
+    setResetMessage(
+      "Please contact support to reset your password on the backend."
+    );
     setResetError("");
     setForgotOpen(false);
-    setFormData((current) => ({
-      ...current,
-      username: resetState.email,
-      password: "",
-    }));
   };
 
   return (
@@ -157,7 +152,7 @@ const Login = ({ onAuth }) => {
           <input
             type="text"
             name="username"
-            placeholder="Enter Your Username"
+            placeholder="Enter Your Email"
             value={formData.username}
             onChange={handleChange}
             className="mb-4 w-full rounded-xl border border-blue-200 px-4 py-3 text-slate-900 outline-none transition placeholder:text-gray-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
@@ -197,10 +192,11 @@ const Login = ({ onAuth }) => {
           </select>
 
           <button
-            className="w-full rounded-xl bg-blue-800 py-3 font-semibold text-white transition hover:bg-blue-900"
+            className="w-full rounded-xl bg-blue-800 py-3 font-semibold text-white transition hover:bg-blue-900 disabled:opacity-60"
             type="submit"
+            disabled={loading}
           >
-            Login
+            {loading ? "Logging in…" : "Login"}
           </button>
 
           <div className="my-6 flex items-center">
@@ -228,14 +224,14 @@ const Login = ({ onAuth }) => {
             </Link>
           </p>
 
-          {resetError && (
-            <p className="mt-4 text-sm font-medium text-red-600">{resetError}</p>
+          {loginError && (
+            <p className="mt-4 text-sm font-medium text-red-600">{loginError}</p>
           )}
         </form>
       </div>
 
       {forgotOpen && (
-          <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/55 p-4 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/55 p-4 backdrop-blur-sm">
           <div className="w-full max-w-lg overflow-hidden rounded-[28px] border border-blue-100 bg-white shadow-2xl">
             <div className="flex items-start justify-between gap-4 px-6 pt-6 sm:px-8 sm:pt-8">
               <div className="max-w-lg">
