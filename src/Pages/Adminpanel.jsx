@@ -17,6 +17,7 @@ import {
   FaUpload,
 } from "react-icons/fa";
 import { allShowcaseEvents } from "../data/eventCatalog";
+import { eventsApi, adminApi, analyticsApi, recordsApi } from "../utils/api";
 
 const eventCategories = [
   {
@@ -351,6 +352,7 @@ export const Adminpanel = () => {
   const [presentEvents, setPresentEvents] = useState(initialPresentEvents);
   const [previousEvents, setPreviousEvents] = useState(initialPreviousEvents);
   const [managedEvents, setManagedEvents] = useState(initialManagedEvents);
+  const [pendingEvents, setPendingEvents] = useState([]);
   const [editingManagedEventId, setEditingManagedEventId] = useState(null);
   const [editor, setEditor] = useState(null);
   const [deleteRequest, setDeleteRequest] = useState(null);
@@ -368,9 +370,54 @@ export const Adminpanel = () => {
   const handleLogout = () => {
     localStorage.removeItem("viventAuth");
     localStorage.removeItem("viventAuthRole");
+    localStorage.removeItem("viventToken");
+    localStorage.removeItem("viventUser");
     navigate("/");
     window.location.reload();
   };
+
+  // Load real data from backend
+  useEffect(() => {
+    // Load all events for present/previous views
+    eventsApi.list({ page_size: 200 }).then((res) => {
+      const items = res?.items || [];
+      const now = new Date();
+      const upcoming = items.filter((e) => new Date(e.start_date) >= now);
+      const past = items.filter((e) => new Date(e.start_date) < now);
+      if (upcoming.length > 0) {
+        setPresentEvents(upcoming.map((e, idx) => ({
+          ...e,
+          id: e.id,
+          title: e.title,
+          category: e.category,
+          date: e.start_date ? new Date(e.start_date).toISOString().split('T')[0] : '',
+          time: e.start_date ? new Date(e.start_date).toLocaleTimeString() : '10:00 AM',
+          venue: e.location || 'TBD',
+          attendees: e.current_participants || 0,
+          status: e.status || 'Upcoming',
+        })));
+      }
+      if (past.length > 0) {
+        setPreviousEvents(past.map((e) => ({
+          ...e,
+          id: e.id,
+          title: e.title,
+          category: e.category,
+          date: e.start_date ? new Date(e.start_date).toISOString().split('T')[0] : '',
+          time: e.start_date ? new Date(e.start_date).toLocaleTimeString() : '10:00 AM',
+          venue: e.location || 'TBD',
+          attendees: e.current_participants || 0,
+          rating: '5.0',
+          status: 'Completed',
+        })));
+      }
+    }).catch(() => {});
+
+    // Load pending events for approval
+    adminApi.pendingEvents().then((data) => {
+      setPendingEvents(data?.items || data || []);
+    }).catch(() => {});
+  }, []);
 
   const handleManagedEventSubmit = (event, form, setForm) => {
     event.preventDefault();
